@@ -1,0 +1,158 @@
+[
+  {
+    "example_id": 0,
+    "original_reasoning": "fact1: Brecken has experienced heartbreak.\nrule: Either Brecken has experienced heartbreak or he has never experienced heartbreak, but not both.\nconclusion: Brecken has experienced heartbreak.\n\nTherefore, it is false that Brecken has never experienced heartbreak. The correct option is: B.",
+    "premises": [
+      "Brecken has experienced heartbreak",
+      "Either Brecken has experienced heartbreak or he has never experienced heartbreak, but not both"
+    ],
+    "extracted_conclusion": "it is false that Brecken has never experienced heartbreak",
+    "fol_conversions": [
+      {
+        "original": "Brecken has experienced heartbreak",
+        "fol": "```",
+        "confidence": 0.8,
+        "issues": []
+      },
+      {
+        "original": "Either Brecken has experienced heartbreak or he has never experienced heartbreak, but not both",
+        "fol": "x B. (HeartBreakB) & -(HeartBreakB & B) & -(B & -HeartBreakB)",
+        "confidence": 0.8,
+        "issues": []
+      }
+    ],
+    "prover9_result": "Timeout",
+    "prover9_success": false,
+    "validation_time_seconds": 50.72324,
+    "llm_errors": []
+  },
+  {
+    "example_id": 1,
+    "original_reasoning": "fact1: Desmond studies rare plants.\nfact2: Desmond does not study common plants.\nrule: If Desmond either studies rare plants or studies common plants (but not both), then he is a recognized expert.\nconclusion: Desmond is a recognized expert.\n\nTherefore, it is true that Desmond is a recognized expert. The correct option is: A.",
+    "premises": [
+      "Desmond does not study common plants",
+      "If Desmond either studies rare plants or studies common plants (but not both), then he is a recognized expert",
+      "Maleah does not study common plants",
+      "Desmond studies rare plants"
+    ],
+    "extracted_conclusion": "it is true that Desmond is a recognized expert",
+    "fol_conversions": [
+      {
+        "original": "Desmond does not study common plants",
+        "fol": "```",
+        "confidence": 0.8,
+        "issues": []
+      },
+      {
+        "original": "If Desmond either studies rare plants or studies common plants (but not both), then he is a recognized expert",
+        "fol": "```",
+        "confidence": 0.8,
+        "issues": []
+      },
+      {
+        "original": "Maleah does not study common plants",
+        "fol": "\\((\\exists x. (\\text{Male} \\land \\neg \\text{common}) \\to \\text{plants})\\) & \\(\\neg (\\exists y. (\\text{female} \\land \\text{sings}) \\to \\text{flowers})\\)",
+        "confidence": 0.8,
+        "issues": []
+      },
+      {
+        "original": "Desmond studies rare plants",
+        "fol": "**",
+        "confidence": 0.8,
+        "issues": []
+      }
+    ],
+    "prover9_result": "Timeout",
+    "prover9_success": false,
+    "validation_time_seconds": 52.8306,
+    "llm_errors": []
+  },
+  {
+    "example_id": 2,
+    "original_reasoning": "According to the context and the conclusions that have already been drawn, we can deduce that it is uncertain that Munchkin is loved by firefighters. The correct option is: C.",
+    "premises": [
+      "Shepherd is not fascinated by fire resistance",
+      "Emanuel does not live in a fire station"
+    ],
+    "extracted_conclusion": "C",
+    "fol_conversions": [
+      {
+        "original": "Shepherd is not fascinated by fire resistance",
+        "fol": "```",
+        "confidence": 0.8,
+        "issues": []
+      },
+      {
+        "original": "Emanuel does not live in a fire station",
+        "fol": "```",
+        "confidence": 0.8,
+        "issues": []
+      }
+    ],
+    "prover9_result": "Timeout",
+    "prover9_success": false,
+    "validation_time_seconds": 49.969786,
+    "llm_errors": []
+  },
+  {
+    "example_id": 3,
+    "original_reasoning": "fact1: Houston the turtle does not have camouflage.\nrule: Either Houston the turtle has camouflage or he has visible markings, but not both.\nconclusion: Houston the turtle has visible markings.\n\nTherefore, it is false that Houston the turtle does not have visible markings. The correct option is: B.",
+    "premises": [
+      "Houston the turtle does not have camouflage",
+      "Either Houston the turtle has camouflage or he has visible markings, but not both"
+    ],
+    "extracted_conclusion": "it is false that Houston the turtle does not have visible markings",
+    "fol_conversions": [
+      {
+        "original": "Houston the turtle does not have camouflage",
+        "fol": "\\((\\neg \\exists x. (T_houston) \\land \\text{has_mveal})\\)",
+        "confidence": 0.8,
+        "issues": []
+      },
+      {
+        "original": "Either Houston the turtle has camouflage or he has visible markings, but not both",
+        "fol": "\\((\\text{Camoh)} \\rightarrow (\\text{Markov} \\vee \\text{Visible})\\) & -(\\text{Markov} \\wedge \\text{Visible})\\) To express the given statement in first-order logic (FOL), we need to break it down into its components and use appropriate logical operators.",
+        "confidence": 0.8,
+        "issues": []
+      }
+    ],
+    "prover9_result": "Timeout",
+    "prover9_success": false,
+    "validation_time_seconds": 47.957861,
+    "llm_errors": []
+  },
+  {
+    "example_id": 4,
+    "original_reasoning": "fact1: Buttercup has recovered from an illness.\nfact2: Buttercup does not serve as a therapy horse.\nrule: If Buttercup has recovered from an illness, then she can either perform heavy work or serve as a therapy horse, but not both.\nconclusion: Buttercup performs heavy work.\n\nTherefore, it is true that Buttercup performs heavy work. The correct option is: A.",
+    "premises": [
+      "Buttercup has recovered from an illness",
+      "If Buttercup has recovered from an illness, then she can either perform heavy work or serve as a therapy horse, but not both",
+      "Buttercup does not serve as a therapy horse"
+    ],
+    "extracted_conclusion": "it is true that Buttercup performs heavy work",
+    "fol_conversions": [
+      {
+        "original": "Buttercup has recovered from an illness",
+        "fol": "```",
+        "confidence": 0.8,
+        "issues": []
+      },
+      {
+        "original": "If Buttercup has recovered from an illness, then she can either perform heavy work or serve as a therapy horse, but not both",
+        "fol": "```",
+        "confidence": 0.8,
+        "issues": []
+      },
+      {
+        "original": "Buttercup does not serve as a therapy horse",
+        "fol": "\\[ \\text{((Smary) |anceses))} & -(Smary) & \\text{Dancesmary}) \\]",
+        "confidence": 0.8,
+        "issues": []
+      }
+    ],
+    "prover9_result": "Timeout",
+    "prover9_success": false,
+    "validation_time_seconds": 50.354003,
+    "llm_errors": []
+  }
+]
