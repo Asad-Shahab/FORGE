@@ -1,0 +1,48 @@
+{
+  "problem": "Context: All cats are mammals. Some mammals are not dogs. If an animal is a cat, then it has four legs.\n\nQuestion: Are all cats dogs?\n\n<reasoning>\nAll cats are mammals.\nSome mammals are not dogs.\nIf an animal is a cat, then it has four legs.\nThe conclusion asks if all cats are dogs.\nFrom the first premise, all cats are mammals, but this does not imply they are dogs.\nThe second premise says some mammals are not dogs, which implies there are mammals that are not dogs.\nTherefore, since cats are mammals and some mammals are not dogs, cats might not be dogs.\nThus, the statement \"all cats are dogs\" is not necessarily true.\n</reasoning>\n\n<answer>B</answer> Alright, let's tackle this logic problem. The user wants a context with specific logical relationships and a question that can be answered as True, False, or Uncertain. Let me start by brainstorming a simple scenario.\n\nFirst, I need to include statements like \"All X are Y,\" \"Some X are Y,\" \"If X then Y,\" or \"X is a",
+  "reasoning": [
+    "All cats are mammals.",
+    "Some mammals are not dogs.",
+    "If an animal is a cat, then it has four legs.",
+    "The conclusion asks if all cats are dogs.",
+    "From the first premise, all cats are mammals, but this does not imply they are dogs.",
+    "The second premise says some mammals are not dogs, which implies there are mammals that are not dogs.",
+    "Therefore, since cats are mammals and some mammals are not dogs, cats might not be dogs.",
+    "Thus, the statement \"all cats are dogs\" is not necessarily true."
+  ],
+  "answer": "B",
+  "fol_results": [
+    [
+      "All cats are mammals.",
+      "∀x (Cat(x) → Mammal(x))"
+    ],
+    [
+      "Some mammals are not dogs.",
+      "∃x (Mammal(x) ∧ ¬Dog(x))"
+    ],
+    [
+      "If an animal is a cat, then it has four legs.",
+      "∀x (Cat(x) → HasFourLegs(x))"
+    ],
+    [
+      "The conclusion asks if all cats are dogs.",
+      "¬∀x (Cat(x) → Dog(x))"
+    ],
+    [
+      "From the first premise, all cats are mammals, but this does not imply they are dogs.",
+      "∀x (Cat(x) → Mammal(x)) ∧ ¬∀x (Mammal(x) → Dog(x))"
+    ],
+    [
+      "The second premise says some mammals are not dogs, which implies there are mammals that are not dogs.",
+      "∃x (Mammal(x) ∧ ¬Dog(x))"
+    ],
+    [
+      "Therefore, since cats are mammals and some mammals are not dogs, cats might not be dogs.",
+      "∃x (Cat(x) ∧ Mammal(x)) ∧ ∃x (Mammal(x) ∧ ¬Dog(x)) → ¬∀x (Cat(x) → Dog(x))"
+    ],
+    [
+      "Thus, the statement \"all cats are dogs\" is not necessarily true.",
+      "¬∀x (Cat(x) → Dog(x))"
+    ]
+  ]
+}
