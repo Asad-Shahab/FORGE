@@ -9,7 +9,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from setup_models import setup_llama_lora
+from setup.setup_models import setup_llama_lora
 
 def convert_fol_to_prover9(fol_formula):
     """Convert mathematical FOL notation to Prover9 syntax"""

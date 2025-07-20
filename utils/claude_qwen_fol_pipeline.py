@@ -9,8 +9,8 @@ Claude → Qwen → FOL → Prover9 Pipeline
 
 import re
 import torch
-from setup_models import setup_qwen3, setup_llama_lora
-from prover9_integration import verify_reasoning_with_prover9, test_prover9_installation
+from setup.setup_models import setup_qwen3, setup_llama_lora
+from verification.prover9_integration import verify_reasoning_with_prover9, test_prover9_installation
 
 def get_claude_generated_problems():
     """Claude-generated logic problems for testing"""

@@ -5,7 +5,7 @@ Run: python setup_models.py
 """
 
 # IMPORTANT: Setup cache directories FIRST before importing ML libraries
-from setup_cache import setup_cache_directories
+from .setup_cache import setup_cache_directories
 print("🗂️  Configuring cache directories...")
 cache_dirs = setup_cache_directories()
 

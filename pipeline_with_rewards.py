@@ -6,9 +6,9 @@ Processes logic problems and evaluates responses using the reward system
 
 import re
 import torch
-from setup_models import setup_qwen3, setup_llama_lora
-from prover9_integration import verify_reasoning_with_prover9, test_prover9_installation
-from reward import LogicalReasoningReward
+from setup.setup_models import setup_qwen3, setup_llama_lora
+from verification.prover9_integration import verify_reasoning_with_prover9, test_prover9_installation
+from reward.reward import LogicalReasoningReward
 
 def get_claude_generated_problems():
     """Claude-generated logic problems for testing"""
