@@ -1,104 +1,138 @@
 #!/usr/bin/env python3
 """
-Claude → Qwen → FOL → Prover9 Pipeline with Reward Model
-Processes logic problems and evaluates responses using the reward system
+Processes logic problems from ProverQA dataset and evaluates responses using the reward system
 """
 
 import re
 import torch
+from datasets import load_dataset
 from setup.setup_models import setup_qwen3, setup_llama_lora
 from verification.prover9_integration import verify_reasoning_with_prover9, test_prover9_installation
 from reward.reward import LogicalReasoningReward
+import random
 
-def get_claude_generated_problems():
-    """Claude-generated logic problems for testing"""
+import random
+
+def load_proverqa_problems(difficulty="easy", max_problems=None):
+    """Load ProverQA problems from the specified difficulty level"""
     
-    problems = [
-        {
-            "id": 1,
-            "context": "All cats are mammals. All mammals are warm-blooded. Fluffy is a cat.",
-            "question": "Is Fluffy warm-blooded?",
-            "expected_answer": "A"  # Changed to A/B/C format
-        },
-        {
-            "id": 2, 
-            "context": "No reptiles are mammals. All snakes are reptiles. Python is a snake.",
-            "question": "Is Python a mammal?",
-            "expected_answer": "B"
-        },
-        {
-            "id": 3,
-            "context": "All students study hard. Some students are successful. John is a student.",
-            "question": "Is John successful?", 
-            "expected_answer": "C"
-        },
-        {
-            "id": 4,
-            "context": "If it rains, then the ground gets wet. If the ground is wet, then plants grow. It is raining today.",
-            "question": "Will plants grow today?",
-            "expected_answer": "A"
-        },
-        {
-            "id": 5,
-            "context": "All birds can fly. Penguins are birds. Tweety is a penguin.",
-            "question": "Can Tweety fly?",
-            "expected_answer": "A"
-        },
-        {
-            "id": 6,
-            "context": "Every teacher is patient. Patient people are kind. Mrs. Smith is a teacher.",
-            "question": "Is Mrs. Smith kind?",
-            "expected_answer": "A"
-        },
-        {
-            "id": 7,
-            "context": "Some flowers are red. All roses are flowers. This plant is a rose.",
-            "question": "Is this plant red?",
-            "expected_answer": "C"
-        },
-        {
-            "id": 8,
-            "context": "All cars need fuel. Electric vehicles are cars. Tesla is an electric vehicle.",
-            "question": "Does Tesla need fuel?",
-            "expected_answer": "A"
-        }
-    ]
-    
-    return problems
+    try:
+        if difficulty == "easy":
+            dataset = load_dataset("opendatalab/ProverQA", data_files="dev/easy.json")
+        elif difficulty == "medium":
+            dataset = load_dataset("opendatalab/ProverQA", data_files="dev/medium.json")
+        elif difficulty == "hard":
+            dataset = load_dataset("opendatalab/ProverQA", data_files="dev/hard.json")
+        else:
+            raise ValueError("Difficulty must be 'easy', 'medium', or 'hard'")
+        
+        data = dataset['train']  # The loaded dataset uses 'train' as the split name
+        
+        # Convert to list for random sampling
+        all_items = list(data)
+        
+        # Randomly sample if max_problems is specified
+        if max_problems and max_problems < len(all_items):
+            selected_items = random.sample(all_items, max_problems)
+        else:
+            selected_items = all_items
+        
+        problems = []
+        for item in selected_items:
+            problems.append({
+                "id": item["id"],
+                "context": item["context"],
+                "question": item["question"],
+                "expected_answer": item["answer"],
+                "options": item["options"],
+                "reasoning": item.get("reasoning", ""),
+                "nl2fol": item.get("nl2fol", {}),
+                "conclusion_fol": item.get("conclusion_fol", ""),
+                "difficulty": difficulty
+            })
+        
+        return problems
+        
+    except Exception as e:
+        print(f"❌ Error loading ProverQA dataset: {e}")
+        return []
 
 def create_qwen_prompt(context, question):
-    """Create a prompt for Qwen to solve the logic problem"""
+    """Create a chat-formatted prompt for Qwen to solve the logic problem"""
     
-    prompt = f"""Context: {context}
+    reasoning_start = "<initial_reasoning>"
+    reasoning_end = "</initial_reasoning>"
+    steps_start = "<steps>"
+    steps_end = "</steps>"
+    answer_start = "<answer>"
+    answer_end = "</answer>"
+    
+    system_prompt = f"""You are an expert in logical reasoning. Analyze the given problem step by step. First, provide your initial reasoning between {reasoning_start} and {reasoning_end}. Then, provide your logical reasoning steps between {steps_start} and {steps_end}. Finally, provide your answer (A, B, or C) between {answer_start} and {answer_end}.
+
+For the steps section, write simple, clear statements in natural language. Each statement should be on its own line. Do not use "Premise 1:", "Premise 2:" or formal logic notation. Just state the facts and conclusions directly, like:
+<Statement 1>
+<Statement 2>
+...
+<Conclusion>"""
+    
+    user_prompt = f"""Context: {context}
 
 Question: {question}
 
-Please solve this step by step using logical reasoning. Format your response exactly like this:
-
-<initial_reasoning>
-[Brief overview of the problem and approach]
-</initial_reasoning>
-
-<steps>
-[Your step-by-step logical reasoning, one statement per line]
-[End with your conclusion]
-</steps>
-
-<answer>
-[A/B/C] - A for True, B for False, C for Uncertain
-</answer>
-
-Solve the problem now:"""
+Please solve this step by step using logical reasoning."""
     
-    return prompt
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+    
+    return messages
 
 def get_qwen_solution(qwen_model, qwen_tokenizer, context, question, max_attempts=3):
     """Get Qwen's solution to the logic problem"""
     
-    prompt = create_qwen_prompt(context, question)
+    # Template components for stopping
+    reasoning_start = "<initial_reasoning>"
+    answer_end = "</answer>"
+    
+    # Get messages from create_qwen_prompt
+    messages = create_qwen_prompt(context, question)
+    system_prompt = messages[0]["content"]
+    
+    # Set up chat template
+    chat_template = \
+        "{% if messages[0]['role'] == 'system' %}"\
+        "{{ messages[0]['content'] + eos_token }}"\
+        "{% set loop_messages = messages[1:] %}"\
+        "{% else %}"\
+        "{{ system_prompt + eos_token }}"\
+        "{% set loop_messages = messages %}"\
+        "{% endif %}"\
+        "{% for message in loop_messages %}"\
+        "{% if message['role'] == 'user' %}"\
+        "{{ message['content'] }}"\
+        "{% elif message['role'] == 'assistant' %}"\
+        "{{ message['content'] + eos_token }}"\
+        "{% endif %}"\
+        "{% endfor %}"\
+        "{% if add_generation_prompt %}{{ reasoning_start }}"\
+        "{% endif %}"
+    
+    chat_template = chat_template\
+        .replace("system_prompt", f"'{system_prompt}'")\
+        .replace("reasoning_start", f"'{reasoning_start}'")
+    
+    qwen_tokenizer.chat_template = chat_template
     
     for attempt in range(max_attempts):
         try:
+            # Apply chat template
+            prompt = qwen_tokenizer.apply_chat_template(
+                messages, 
+                tokenize=False, 
+                add_generation_prompt=True
+            )
+            
             inputs = qwen_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1500)
             device = next(qwen_model.parameters()).device
             inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -106,47 +140,35 @@ def get_qwen_solution(qwen_model, qwen_tokenizer, context, question, max_attempt
             with torch.no_grad():
                 outputs = qwen_model.generate(
                     **inputs,
-                    max_new_tokens=500,
+                    max_new_tokens=800,
                     temperature=0.7,
                     do_sample=True,
                     pad_token_id=qwen_tokenizer.eos_token_id,
                     eos_token_id=qwen_tokenizer.eos_token_id,
+                    stopping_criteria=None,
+                    stop_strings=[answer_end],
+                    tokenizer=qwen_tokenizer,  # ADD THIS LINE
                     repetition_penalty=1.1,
                     use_cache=False,
                 )
             
-            complete_output = qwen_tokenizer.decode(outputs[0], skip_special_tokens=True)
+            # Decode only the generated part
+            generated_tokens = outputs[0][inputs['input_ids'].shape[1]:]
+            generated_part = qwen_tokenizer.decode(generated_tokens, skip_special_tokens=True)
             
-            if prompt in complete_output:
-                generated_part = complete_output.replace(prompt, "").strip()
-            else:
-                generated_tokens = outputs[0][inputs['input_ids'].shape[1]:]
-                generated_part = qwen_tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            # Ensure we stop at </answer> if it wasn't caught by stop_strings
+            if answer_end in generated_part:
+                generated_part = generated_part.split(answer_end)[0] + answer_end
             
             return generated_part
             
         except Exception as e:
+            print(f"❌ Attempt {attempt + 1} failed: {e}")
             if attempt == max_attempts - 1:
-                return create_manual_reasoning(context, question)
+                print(f"❌ Failed to get solution after {max_attempts} attempts")
+                return None
     
     return None
-
-def create_manual_reasoning(context, question):
-    """Create manual reasoning if Qwen fails"""
-    
-    return """<initial_reasoning>
-Analyzing the given premises to determine logical conclusion.
-</initial_reasoning>
-
-<steps>
-The context provides logical statements and relationships.
-Following logical deduction from the given premises.
-Based on the established relationships, making a determination.
-</steps>
-
-<answer>
-C
-</answer>"""
 
 def parse_qwen_solution(qwen_output):
     """Parse Qwen's solution to extract reasoning and answer"""
@@ -188,6 +210,10 @@ def parse_qwen_solution(qwen_output):
 
 def convert_reasoning_to_fol(reasoning_statements, llama_model, llama_tokenizer):
     """Convert Qwen's reasoning statements to FOL using Llama"""
+
+    print(f"\n🔍 Converting {len(reasoning_statements)} statements to FOL:")
+    for i, statement in enumerate(reasoning_statements, 1):
+        print(f"  {i}. {statement}")
     
     def translate_nl_to_fol(text):
         def formatting_func(text):
@@ -218,7 +244,7 @@ def convert_reasoning_to_fol(reasoning_statements, llama_model, llama_tokenizer)
         with torch.no_grad():
             outputs = llama_model.generate(
                 **inputs, 
-                max_new_tokens=100, 
+                max_new_tokens=200, 
                 temperature=0.1, 
                 do_sample=True
             )
@@ -246,8 +272,9 @@ def convert_reasoning_to_fol(reasoning_statements, llama_model, llama_tokenizer)
 def run_complete_pipeline(problem):
     """Run the complete pipeline with reward evaluation"""
     
-    print(f"\nProblem #{problem['id']}: {problem['question']}")
-    print("-" * 60)
+    print(f"\nProblem #{problem['id']} ({problem['difficulty']})")
+    print(f"Question: {problem['question']}")
+    print("-" * 80)
     
     # Initialize reward calculator
     reward_calculator = LogicalReasoningReward()
@@ -256,22 +283,24 @@ def run_complete_pipeline(problem):
     try:
         qwen_model, qwen_tokenizer = setup_qwen3()
     except Exception as e:
-        qwen_model, qwen_tokenizer = None, None
-    
-    llama_model, llama_tokenizer = setup_llama_lora()
-    
-    # Get Qwen's solution
-    if qwen_model and qwen_tokenizer:
-        qwen_output = get_qwen_solution(qwen_model, qwen_tokenizer, problem['context'], problem['question'])
-    else:
-        qwen_output = create_manual_reasoning(problem['context'], problem['question'])
-    
-    if not qwen_output:
-        print("❌ Failed to get solution")
+        print(f"❌ Failed to load Qwen model: {e}")
         return None
     
-    # Display raw Qwen output immediately for debugging
-    print("\n🤖 RAW QWEN OUTPUT:")
+    try:
+        llama_model, llama_tokenizer = setup_llama_lora()
+    except Exception as e:
+        print(f"❌ Failed to load Llama model: {e}")
+        return None
+    
+    # Get Qwen's solution
+    qwen_output = get_qwen_solution(qwen_model, qwen_tokenizer, problem['context'], problem['question'])
+    
+    if not qwen_output:
+        print("❌ Failed to get solution from Qwen")
+        return None
+    
+    # Display complete Qwen solution
+    print("\n🤖 COMPLETE QWEN SOLUTION:")
     print("=" * 60)
     print(qwen_output)
     print("=" * 60)
@@ -279,16 +308,8 @@ def run_complete_pipeline(problem):
     # Parse solution
     reasoning_statements, qwen_answer = parse_qwen_solution(qwen_output)
     
-    print(f"\n🔍 PARSING RESULTS:")
-    print(f"Extracted answer: '{qwen_answer}'")
-    print(f"Number of reasoning statements found: {len(reasoning_statements)}")
-    if reasoning_statements:
-        print("Reasoning statements:")
-        for i, stmt in enumerate(reasoning_statements, 1):
-            print(f"  {i}. {stmt}")
-    
     if not reasoning_statements:
-        print("❌ No reasoning statements found")
+        print("❌ No reasoning statements found in output")
         return None
     
     # Convert to FOL
@@ -297,7 +318,7 @@ def run_complete_pipeline(problem):
     # Verify with Prover9
     verification_result = verify_reasoning_with_prover9(
         fol_statements, 
-        f"Problem {problem['id']}"
+        f"ProverQA Problem {problem['id']}"
     )
     
     # Calculate rewards
@@ -309,11 +330,11 @@ def run_complete_pipeline(problem):
     )
     
     # Display results
-    print(f"\n📊 RESULTS:")
+    print(f"\n📝 RESULTS:")
     print(f"Expected: {problem['expected_answer']} | Generated: {qwen_answer}")
     print(f"Prover9 Valid: {verification_result.get('valid', False)}")
     
-    print("\n🏆 Reward Breakdown:")
+    print("\n📊 Reward Breakdown:")
     print(f"  Answer Correctness: {reward_components.answer_correctness:.2f} (35%)")
     print(f"  Logical Validity:   {reward_components.logical_validity:.2f} (55%)")
     print(f"  Format Compliance:  {reward_components.format_compliance:.2f} (10%)")
@@ -329,43 +350,70 @@ def run_complete_pipeline(problem):
         'qwen_output': qwen_output
     }
 
-def interactive_problem_selection():
-    """Let user select which problem to test"""
+def interactive_dataset_selection():
+    """Let user select difficulty and number of problems"""
     
-    problems = get_claude_generated_problems()
-    
-    print("📋 Available Logic Problems:")
-    for problem in problems:
-        print(f"{problem['id']}. {problem['question']}")
-    
-    print(f"{len(problems)+1}. All problems")
+    print("📋 ProverQA Dataset Selection:")
+    print("1. Easy problems")
+    print("2. Medium problems") 
+    print("3. Hard problems")
     
     while True:
         try:
-            choice = input(f"\nChoose problem (1-{len(problems)+1}): ").strip()
-            choice = int(choice)
+            difficulty_choice = input("\nChoose difficulty (1-3): ").strip()
+            difficulty_map = {"1": "easy", "2": "medium", "3": "hard"}
             
-            if 1 <= choice <= len(problems):
-                return [problems[choice-1]]
-            elif choice == len(problems)+1:
-                return problems
-            else:
+            if difficulty_choice not in difficulty_map:
                 print("❌ Invalid choice")
+                continue
                 
+            difficulty = difficulty_map[difficulty_choice]
+            break
+            
         except ValueError:
             print("❌ Please enter a number")
+    
+    while True:
+        try:
+            num_problems = input("Number of problems (1-50, or 'all'): ").strip()
+            
+            if num_problems.lower() == 'all':
+                max_problems = None
+                break
+            else:
+                max_problems = int(num_problems)
+                if 1 <= max_problems <= 50:
+                    break
+                else:
+                    print("❌ Please enter 1-50 or 'all'")
+                    
+        except ValueError:
+            print("❌ Please enter a number or 'all'")
+    
+    print(f"\n🔄 Loading {difficulty} problems...")
+    problems = load_proverqa_problems(difficulty, max_problems)
+    
+    if not problems:
+        print("❌ Failed to load problems")
+        return []
+    
+    print(f"✅ Loaded {len(problems)} problems")
+    return problems
 
 def main():
     """Main function"""
     
-    print("🚀 Pipeline with Reward Evaluation")
+    print("🚀 ProverQA Pipeline with Reward Evaluation")
     print("=" * 50)
     
     if not test_prover9_installation():
         print("❌ Prover9 not available")
         return
     
-    selected_problems = interactive_problem_selection()
+    selected_problems = interactive_dataset_selection()
+    
+    if not selected_problems:
+        return
     
     results = []
     
@@ -388,6 +436,11 @@ def main():
         print(f"Average Correctness:     {avg_correctness:.2f}")
         print(f"Average Logical Validity: {avg_validity:.2f}")
         print(f"Average Format Score:    {avg_format:.2f}")
+        
+        # Accuracy breakdown
+        correct_answers = sum(1 for r in results if r['qwen_answer'] == r['problem']['expected_answer'])
+        accuracy = correct_answers / len(results) * 100
+        print(f"Answer Accuracy:         {accuracy:.1f}% ({correct_answers}/{len(results)})")
 
 if __name__ == "__main__":
     main()
