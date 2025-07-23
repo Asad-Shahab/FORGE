@@ -140,7 +140,7 @@ def get_qwen_solution(qwen_model, qwen_tokenizer, context, question, max_attempt
             with torch.no_grad():
                 outputs = qwen_model.generate(
                     **inputs,
-                    max_new_tokens=1024,
+                    max_new_tokens=1000,
                     temperature=0.7,
                     do_sample=True,
                     pad_token_id=qwen_tokenizer.eos_token_id,

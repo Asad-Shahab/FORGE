@@ -127,7 +127,10 @@ logical-reasoning-training/
 ├── pipeline_dev.py                   # Pipeline on dev dataset
 ├── train.py                          # Main GRPO Training file
 ├── dataset/
+│   ├── dev/
+│   ├── sft/
 │   ├── __init__.py
+│   ├── dev_split.py
 │   ├── proverqa_simplified.json      # Processed dataset
 │   └── proverqa_processor.py         # Dataset processing
 ├── reward/
