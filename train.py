@@ -96,7 +96,7 @@ def format_dataset(dataset_path):
     return Dataset.from_list(formatted_data)
 
 # Load dataset
-dataset = format_dataset("proverqa_simplified.json")
+dataset = format_dataset("dataset/proverqa_simplified.json")
 print(f"Loaded {len(dataset)} problems")
 
 # ============= REWARD FUNCTIONS =============

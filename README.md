@@ -122,11 +122,13 @@ python pipeline_with_rewards.py
 After successful setup, your directory should look like:
 
 ```
-logical-reasoning-pipeline/
+logical-reasoning-training/
 ├── pipeline_with_rewards.py          # Main pipeline
-├── proverqa_simplified.json          # Processed dataset
+├── pipeline_dev.py                   # Pipeline on dev dataset
+├── train.py                          # Main GRPO Training file
 ├── dataset/
 │   ├── __init__.py
+│   ├── proverqa_simplified.json      # Processed dataset
 │   └── proverqa_processor.py         # Dataset processing
 ├── reward/
 │   ├── __init__.py
