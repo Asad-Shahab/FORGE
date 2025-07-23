@@ -18,7 +18,20 @@ def convert_fol_to_prover9(fol_formula):
     elif fol_formula.startswith('φ='):
         fol_formula = fol_formula[2:].strip()
     
-    # Prover9 syntax conversions
+    # Convert XOR to equivalent expression: A ⊕ B → (A | B) & -(A & B)
+    # Handle both ⊕ and XOR symbols
+    xor_conversions = [
+        # Pattern: word ⊕ word
+        (r'(\w+)\s*⊕\s*(\w+)', r'((\1 | \2) & -(\1 & \2))'),
+        # Pattern: word XOR word  
+        (r'(\w+)\s+XOR\s+(\w+)', r'((\1 | \2) & -(\1 & \2))'),
+    ]
+    
+    result = fol_formula
+    for pattern, replacement in xor_conversions:
+        result = re.sub(pattern, replacement, result)
+    
+    # Prover9 syntax conversions (existing)
     conversions = [
         # Quantifiers
         (r'∀(\w+)', r'all \1'),
@@ -30,13 +43,11 @@ def convert_fol_to_prover9(fol_formula):
         (r'¬', r'-'),
         (r'→', r' -> '),
         (r'↔', r' <-> '),
-        (r'⊕', r' XOR '),  # XOR might need special handling
         
         # Clean up extra spaces
         (r'\s+', r' '),
     ]
     
-    result = fol_formula
     for pattern, replacement in conversions:
         result = re.sub(pattern, replacement, result)
     

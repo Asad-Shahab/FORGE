@@ -140,15 +140,15 @@ def get_qwen_solution(qwen_model, qwen_tokenizer, context, question, max_attempt
             with torch.no_grad():
                 outputs = qwen_model.generate(
                     **inputs,
-                    max_new_tokens=800,
+                    max_new_tokens=1024,
                     temperature=0.7,
                     do_sample=True,
                     pad_token_id=qwen_tokenizer.eos_token_id,
                     eos_token_id=qwen_tokenizer.eos_token_id,
                     stopping_criteria=None,
                     stop_strings=[answer_end],
-                    tokenizer=qwen_tokenizer,  # ADD THIS LINE
-                    repetition_penalty=1.1,
+                    tokenizer=qwen_tokenizer,  
+                    repetition_penalty=1.04,
                     use_cache=False,
                 )
             
@@ -215,19 +215,41 @@ def convert_reasoning_to_fol(reasoning_statements, llama_model, llama_tokenizer)
     for i, statement in enumerate(reasoning_statements, 1):
         print(f"  {i}. {statement}")
     
+    improved_system_prompt = """You are an expert at converting natural language statements into First-Order Logic (FOL). Follow these strict rules:
+
+    SYMBOLS: Use only ∀ (for all), ∃ (there exists), ¬ (not), ∧ (and), ∨ (or), → (implies), ↔ (if and only if)
+
+    NAMING RULES:
+    - All names/entities must be lowercase (natalie, john, stone)
+    - Use simple, clear predicate names (Weak(x), Resilient(x), Fearless(x))
+    - Be consistent with predicate names throughout
+
+    SIMPLICITY RULES:
+    - Keep expressions as simple as possible
+    - Avoid unnecessary quantifiers when dealing with specific individuals
+    - Use direct predicates: Weak(natalie) instead of exists x (Weakness(x) & Has(natalie, x))
+
+    VARIABLE RULES:
+    - Never use unbound variables
+    - If you use ∃x or ∀x, make sure x appears in the formula
+    - For specific people, use their name directly as a constant
+
+    EXAMPLES:
+    "John is tall" → Tall(john)
+    "If someone is weak, they are not resilient" → all x (Weak(x) → ¬Resilient(x))
+    "Mary is either smart or funny" → Smart(mary) ∨ Funny(mary)
+    "Everyone who studies passes" → all x (Studies(x) → Passes(x))
+
+    Start your answer with '𝜙=' followed by the FOL formula. Do not include any other text."""
+
+    # Update the translate_nl_to_fol function to use this prompt:
     def translate_nl_to_fol(text):
         def formatting_func(text):
             return llama_tokenizer.apply_chat_template(
                 [
                     {
                         "role": "system",
-                        "content": (
-                            "You are a helpful AI assistant that translates Natural Language (NL) text "
-                            "into First-Order Logic (FOL) using only the given quantors and junctors: "
-                            "∀ (for all), ∃ (there exists), ¬ (not), ∧ (and), ∨ (or), → (implies), "
-                            "↔ (if and only if), ⊕ (xor). "
-                            "Start your answer with '𝜙=' followed by the FOL-formula. Do not include any other text."
-                        ),
+                        "content": improved_system_prompt
                     },
                     {"role": "user", "content": text},
                 ],
@@ -244,7 +266,7 @@ def convert_reasoning_to_fol(reasoning_statements, llama_model, llama_tokenizer)
         with torch.no_grad():
             outputs = llama_model.generate(
                 **inputs, 
-                max_new_tokens=200, 
+                max_new_tokens=150, 
                 temperature=0.1, 
                 do_sample=True
             )
