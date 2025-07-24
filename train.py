@@ -15,6 +15,7 @@ from datasets import Dataset
 from unsloth import FastLanguageModel
 from trl import GRPOConfig, GRPOTrainer
 from vllm import SamplingParams
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Import from existing modules
 from setup.setup_models import setup_qwen3, setup_llama_lora
@@ -31,13 +32,7 @@ def setup_chat_template(tokenizer):
     answer_start = "<answer>"
     answer_end = "</answer>"
 
-    system_prompt = f"""You are an expert in logical reasoning. Analyze the given problem step by step. First, provide your initial reasoning between {reasoning_start} and {reasoning_end}. Then, provide your logical reasoning steps between {steps_start} and {steps_end}. Finally, provide your answer (A, B, or C) between {answer_start} and {answer_end}.
-
-For the steps section, write simple, clear statements in natural language. Each statement should be on its own line. Do not use "Premise 1:", "Premise 2:" or formal logic notation. Just state the facts and conclusions directly, like:
-<Statement 1>
-<Statement 2>
-...
-<Conclusion>"""
+    system_prompt = f"""You are an expert in logical reasoning. Analyze the given problem step by step. First, provide your initial reasoning between {reasoning_start} and {reasoning_end}. Then, provide your logical reasoning steps between {steps_start} and {steps_end}. Finally, provide your answer (A, B, or C) between {answer_start} and {answer_end}."""
 
     chat_template = \
         "{% if messages[0]['role'] == 'system' %}"\
@@ -78,7 +73,7 @@ def load_grpo_dataset(dataset_path, max_examples=None):
     print(f"📊 Loaded {len(data)} training examples")
     return data
 
-def format_grpo_dataset(data, system_prompt):
+def format_grpo_dataset(data, system_prompt, tokenizer):
     """Format dataset for GRPO training"""
     formatted_data = []
     for item in data:
@@ -87,10 +82,17 @@ def format_grpo_dataset(data, system_prompt):
             {"role": "user", "content": item["question"]}
         ]
         
+        # Create prompt using chat template
+        prompt = tokenizer.apply_chat_template(
+            messages, 
+            tokenize=False, 
+            add_generation_prompt=True
+        )
+        
+        # GRPO expects these specific fields
         formatted_data.append({
-            "messages": messages,
-            "expected_answer": item["answer"],
-            "question": item["question"]
+            "prompt": prompt,
+            "expected_answer": item["answer"],  
         })
     
     return Dataset.from_list(formatted_data)
@@ -233,7 +235,7 @@ def setup_reward_functions(tokenizer):
         
         for i, completion in enumerate(completions):
             try:
-                response = completion[0]["content"]
+                response = completion
                 expected = expected_answer[i] if isinstance(expected_answer, list) else expected_answer
                 
                 # Parse Qwen's solution
@@ -275,14 +277,7 @@ def setup_reward_functions(tokenizer):
                 scaled_reward = reward_components.total_reward * 10.0
                 scores.append(scaled_reward)
                 
-                # Optional: Print progress for first few examples
-                if i < 3:  # Only print first 3 to avoid spam
-                    print(f"  Example {i}: Predicted={predicted_answer}, Expected={expected}, "
-                          f"Valid={verification_result.get('valid', False)}, "
-                          f"Reward={scaled_reward:.2f}")
-                
             except Exception as e:
-                print(f"  ❌ Error processing completion {i}: {e}")
                 scores.append(-1.0)  # Penalty for failed processing
         
         return scores
@@ -299,13 +294,23 @@ def setup_model_for_grpo(model_path=None, max_seq_length=3000, lora_rank=32):
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_path,
             max_seq_length=max_seq_length,
-            load_in_4bit=True,
+            load_in_4bit=False,  
+            fast_inference=True,  
+            max_lora_rank=lora_rank,  
+            gpu_memory_utilization=0.7, 
             dtype=None,
         )
     else:
         print("🔧 Loading base model for GRPO training...")
-        # Use setup function from setup/setup_models.py
-        model, tokenizer = setup_qwen3()
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name="unsloth/Qwen3-8B-unsloth-bnb-4bit",
+            max_seq_length=max_seq_length,
+            load_in_4bit=False, 
+            fast_inference=True,  
+            max_lora_rank=lora_rank,  
+            gpu_memory_utilization=0.7,  
+            dtype=None,
+        )
         
         # Apply LoRA for training
         model = FastLanguageModel.get_peft_model(
@@ -331,6 +336,9 @@ def train_grpo_model(model, tokenizer, dataset, reward_functions, args):
     # Create output directory
     os.makedirs(args.grpo_output_dir, exist_ok=True)
     
+    max_prompt_length = 1000  # Adjust based on your prompts
+    max_completion_length = args.max_seq_length - max_prompt_length
+
     # VLLM sampling parameters
     vllm_sampling_params = SamplingParams(
         min_p=0.1,
@@ -343,9 +351,6 @@ def train_grpo_model(model, tokenizer, dataset, reward_functions, args):
     
     # Training configuration
     training_args = GRPOConfig(
-
-        ddp_find_unused_parameters=False # For multiple-GPU
-
         # Sampling parameters
         vllm_sampling_params=vllm_sampling_params,
         temperature=args.temperature,
@@ -364,8 +369,8 @@ def train_grpo_model(model, tokenizer, dataset, reward_functions, args):
         max_steps=args.grpo_max_steps,
         
         # Generation parameters
-        max_prompt_length=1000,
-        max_completion_length=2000,
+        max_prompt_length=max_prompt_length,
+        max_completion_length=max_completion_length,
         
         # Logging and saving
         logging_steps=args.grpo_logging_steps,
@@ -383,19 +388,7 @@ def train_grpo_model(model, tokenizer, dataset, reward_functions, args):
         args=training_args,
         train_dataset=dataset,
     )
-    
-    # Print example to verify format
-    print("\n=== Example GRPO prompt ===")
-    example = dataset[0]
-    prompt = tokenizer.apply_chat_template(
-        example['messages'], 
-        tokenize=False, 
-        add_generation_prompt=True
-    )
-    print(prompt[:500] + "..." if len(prompt) > 500 else prompt)
-    print(f"Expected answer: {example['expected_answer']}")
-    print("=" * 50)
-    
+
     # Train
     trainer.train()
     
@@ -432,9 +425,9 @@ def main():
     sft_output_dir = "./sft_models"
     
     # GRPO parameters
-    grpo_max_steps = 1250
-    grpo_batch_size = 2
-    grpo_gradient_accumulation_steps = 2
+    grpo_max_steps = 100  #CHANGE THIS TO 1250
+    grpo_batch_size = 4
+    grpo_gradient_accumulation_steps = 3
     grpo_learning_rate = 5e-6
     num_generations = 4
     temperature = 1.0
@@ -509,7 +502,7 @@ def main():
     
     # Format GRPO dataset
     print("📝 Formatting dataset for GRPO training...")
-    grpo_dataset = format_grpo_dataset(grpo_data, system_prompt)
+    grpo_dataset = format_grpo_dataset(grpo_data, system_prompt, tokenizer)
     print(f"📊 Formatted {len(grpo_dataset)} examples")
     
     # Setup reward functions with full pipeline

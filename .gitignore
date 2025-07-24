@@ -2,3 +2,6 @@ unsloth_compiled_cache/
 __pycache__/
 cache/
 .claude/
+sft_models/
+grpo_models/
+grpo_trainer_lora_model/

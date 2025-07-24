@@ -199,18 +199,20 @@ def parse_prover9_output(output):
 def verify_reasoning_with_prover9(fol_statements, problem_name="Logic Problem"):
     """Main function to verify reasoning using Prover9"""
     
-    print(f"🔍 Verifying '{problem_name}' with Prover9")
-    print("=" * 60)
+    # print(f"🔍 Verifying '{problem_name}' with Prover9")
+    # print("=" * 60)
     
     # Extract premises and conclusion
     premises, conclusion = extract_premises_and_conclusion(fol_statements)
     
-    print("📝 Prover9 Input:")
-    print(f"Premises ({len(premises)}):")
-    for i, premise in enumerate(premises, 1):
-        print(f"  {i}. {premise}")
+    # Uncomment if want to print 
+
+    # print("📝 Prover9 Input:")
+    # print(f"Premises ({len(premises)}):")
+    # for i, premise in enumerate(premises, 1):
+    #     print(f"  {i}. {premise}")
     
-    print(f"Conclusion: {conclusion}")
+    # print(f"Conclusion: {conclusion}")
     
     # Create Prover9 input
     prover9_input = create_prover9_input(premises, conclusion, problem_name)
@@ -226,8 +228,8 @@ def verify_reasoning_with_prover9(fol_statements, problem_name="Logic Problem"):
         proof_info = "No output from Prover9"
     
     # Show final results only
-    print(f"🎯 Proof Status: {'✅ VALID' if proof_found else '❌ INVALID'}")
-    print(f"📋 Details: {proof_info}")
+    # print(f"🎯 Proof Status: {'✅ VALID' if proof_found else '❌ INVALID'}")
+    # print(f"📋 Details: {proof_info}")
     
     return {
         'valid': proof_found,

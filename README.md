@@ -21,6 +21,43 @@ cd logical-reasoning-pipeline
 # Create and activate conda environment
 conda create --name logic python=3.11 pytorch-cuda=12.1 pytorch cudatoolkit xformers -c pytorch -c nvidia -c xformers -y
 conda activate logic
+conda install -c nvidia cudnn -y
+conda install -c nvidia nccl -y
+pip install vllm unsloth
+```
+
+or 
+
+```bash
+conda create --name logic python=3.11 -y
+conda activate logic
+
+# Install vLLM first (this will install PyTorch with proper NCCL setup)
+pip install vllm
+
+# Install xformers separately (needed for unsloth)
+pip install xformers
+
+# Install remaining packages
+pip install accelerate unsloth
+
+# Test everything
+python -c "
+import torch
+import accelerate
+import xformers
+print('PyTorch version:', torch.__version__)
+print('CUDA available:', torch.cuda.is_available())
+print('CUDA version:', torch.version.cuda)
+print('GPU count:', torch.cuda.device_count())
+if torch.cuda.is_available():
+    print('GPU name:', torch.cuda.get_device_name(0))
+print('Accelerate version:', accelerate.__version__)
+print('Xformers version:', xformers.__version__)
+print('vLLM import test...', end=' ')
+import vllm
+print('✓')
+"
 ```
 
 ### 2. Install Dependencies
