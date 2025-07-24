@@ -72,7 +72,8 @@ def setup_qwen3():
     
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name="unsloth/Qwen3-8B-unsloth-bnb-4bit",
-        max_seq_length=2048,
+        max_seq_length=3000,
+        device_map="balanced",
         dtype=None,  # Auto-detect
         load_in_4bit=True,
     )
@@ -109,7 +110,7 @@ def setup_llama_lora():
     model_lora = AutoModelForCausalLM.from_pretrained(
         base_model_name, 
         trust_remote_code=True, 
-        device_map="auto",
+        device_map="balanced",
         torch_dtype=torch.bfloat16,
         token=token
     )
@@ -118,7 +119,7 @@ def setup_llama_lora():
     model_lora = PeftModel.from_pretrained(
         model_lora, 
         lora_weights, 
-        device_map="auto",
+        device_map="balanced",
         token=token
     )
     

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import torch
+import wandb
 from datasets import Dataset
 from unsloth import FastLanguageModel
 from trl import GRPOConfig, GRPOTrainer
@@ -185,7 +186,7 @@ Start your answer with '𝜙=' followed by the FOL formula. Do not include any o
         with torch.no_grad():
             outputs = llama_model.generate(
                 **inputs, 
-                max_new_tokens=150, 
+                max_new_tokens=300, 
                 temperature=0.1, 
                 do_sample=True
             )
@@ -261,6 +262,14 @@ def setup_reward_functions(tokenizer):
                     prover9_result=verification_result,
                     reasoning_steps=reasoning_statements
                 )
+
+                if i < 5:  # Log first 5 examples per batch to avoid spam
+                    wandb.log({
+                        f"reward/answer_correctness": reward_components.answer_correctness,
+                        f"reward/logical_validity": reward_components.logical_validity, 
+                        f"reward/format_compliance": reward_components.format_compliance,
+                        f"reward/prover9_valid": verification_result.get('valid', False),
+                    })
                 
                 # Scale reward for GRPO (typically 0-10 range works well)
                 scaled_reward = reward_components.total_reward * 10.0
@@ -281,7 +290,7 @@ def setup_reward_functions(tokenizer):
     # Return single comprehensive reward function
     return [compute_full_pipeline_reward]
 
-def setup_model_for_grpo(model_path=None, max_seq_length=2048, lora_rank=32):
+def setup_model_for_grpo(model_path=None, max_seq_length=3000, lora_rank=32):
     """Setup model for GRPO training"""
     print("🚀 Setting up model for GRPO training...")
     
@@ -334,6 +343,9 @@ def train_grpo_model(model, tokenizer, dataset, reward_functions, args):
     
     # Training configuration
     training_args = GRPOConfig(
+
+        ddp_find_unused_parameters=False # For multiple-GPU
+
         # Sampling parameters
         vllm_sampling_params=vllm_sampling_params,
         temperature=args.temperature,
@@ -352,14 +364,14 @@ def train_grpo_model(model, tokenizer, dataset, reward_functions, args):
         max_steps=args.grpo_max_steps,
         
         # Generation parameters
-        max_prompt_length=args.max_seq_length // 2,
-        max_completion_length=args.max_seq_length // 2,
+        max_prompt_length=1000,
+        max_completion_length=2000,
         
         # Logging and saving
         logging_steps=args.grpo_logging_steps,
         save_steps=args.grpo_save_steps,
         output_dir=args.grpo_output_dir,
-        report_to="none",
+        report_to="wandb",
         save_total_limit=2,
     )
     
@@ -405,49 +417,30 @@ def main():
     parser.add_argument("--sft_model_path", type=str, default=None,
                       help="Path to pre-trained SFT model (skips SFT if provided)")
     
-    # Dataset arguments
-    parser.add_argument("--grpo_dataset", type=str, default="dataset/proverqa_simplified.json",
-                      help="Path to GRPO training dataset")
-    parser.add_argument("--sft_dataset", type=str, default="dataset/sft/sft_with_reasoning.json",
-                      help="Path to SFT training dataset")
-    parser.add_argument("--max_examples", type=int, default=None,
-                      help="Maximum number of training examples")
-    
-    # Model arguments
-    parser.add_argument("--max_seq_length", type=int, default=2048,
-                      help="Maximum sequence length")
-    parser.add_argument("--lora_rank", type=int, default=32,
-                      help="LoRA rank")
-    
-    # SFT arguments
-    parser.add_argument("--sft_epochs", type=int, default=1,
-                      help="SFT training epochs")
-    parser.add_argument("--sft_steps", type=int, default=100,
-                      help="SFT training steps")
-    parser.add_argument("--sft_output_dir", type=str, default="./sft_models",
-                      help="SFT output directory")
-    
-    # GRPO arguments
-    parser.add_argument("--grpo_max_steps", type=int, default=1000,
-                      help="GRPO training steps")
-    parser.add_argument("--grpo_batch_size", type=int, default=1,
-                      help="GRPO per device batch size")
-    parser.add_argument("--grpo_gradient_accumulation_steps", type=int, default=4,
-                      help="GRPO gradient accumulation steps")
-    parser.add_argument("--grpo_learning_rate", type=float, default=5e-6,
-                      help="GRPO learning rate")
-    parser.add_argument("--num_generations", type=int, default=4,
-                      help="Number of generations per prompt")
-    parser.add_argument("--temperature", type=float, default=1.0,
-                      help="Sampling temperature")
-    parser.add_argument("--grpo_logging_steps", type=int, default=10,
-                      help="GRPO logging steps")
-    parser.add_argument("--grpo_save_steps", type=int, default=100,
-                      help="GRPO save steps")
-    parser.add_argument("--grpo_output_dir", type=str, default="./grpo_models",
-                      help="GRPO output directory")
-    
     args = parser.parse_args()
+    
+    # Set default parameters
+    grpo_dataset = "dataset/proverqa_simplified.json"
+    sft_dataset = "dataset/sft/sft_with_reasoning.json"
+    max_examples = None
+    max_seq_length = 3000
+    lora_rank = 32
+    
+    # SFT parameters
+    sft_epochs = 1
+    sft_steps = 100
+    sft_output_dir = "./sft_models"
+    
+    # GRPO parameters
+    grpo_max_steps = 1250
+    grpo_batch_size = 2
+    grpo_gradient_accumulation_steps = 2
+    grpo_learning_rate = 5e-6
+    num_generations = 4
+    temperature = 1.0
+    grpo_logging_steps = 10
+    grpo_save_steps = 100
+    grpo_output_dir = "./grpo_models"
     
     print("🧠 GRPO Training Pipeline for Logical Reasoning")
     print("=" * 60)
@@ -459,6 +452,22 @@ def main():
         print("Please install Prover9 to use logical verification rewards")
         return
     print("✅ Prover9 ready")
+
+    print("🔧 Initializing wandb...")
+    wandb.init(
+        project="logical-reasoning-grpo",
+        name=f"grpo-training",
+        config={
+            "grpo_max_steps": grpo_max_steps,
+            "grpo_batch_size": grpo_batch_size,
+            "grpo_learning_rate": grpo_learning_rate,
+            "num_generations": num_generations,
+            "temperature": temperature,
+            "max_seq_length": max_seq_length,
+            "lora_rank": lora_rank,
+        }
+    )
+    print("✅ Wandb initialized")
     
     sft_model_path = args.sft_model_path
     
@@ -469,30 +478,30 @@ def main():
         # Create SFT args
         class SFTArgs:
             def __init__(self):
-                self.dataset = args.sft_dataset
-                self.max_examples = args.max_examples
-                self.max_seq_length = args.max_seq_length
-                self.lora_rank = args.lora_rank
-                self.epochs = args.sft_epochs
-                self.max_steps = args.sft_steps
+                self.dataset = sft_dataset
+                self.max_examples = max_examples
+                self.max_seq_length = max_seq_length
+                self.lora_rank = lora_rank
+                self.epochs = sft_epochs
+                self.max_steps = sft_steps
                 self.batch_size = 1
                 self.gradient_accumulation_steps = 1
                 self.learning_rate = 2e-4
                 self.warmup_steps = 10
                 self.logging_steps = 5
                 self.save_steps = 50
-                self.output_dir = args.sft_output_dir
+                self.output_dir = sft_output_dir
         
         sft_args = SFTArgs()
         sft_model_path = train_sft_main(sft_args)
         print(f"✅ SFT pre-training completed: {sft_model_path}")
     
     # Load GRPO dataset
-    grpo_data = load_grpo_dataset(args.grpo_dataset, args.max_examples)
+    grpo_data = load_grpo_dataset(grpo_dataset, max_examples)
     
     # Setup model for GRPO
     model, tokenizer = setup_model_for_grpo(
-        sft_model_path, args.max_seq_length, args.lora_rank
+        sft_model_path, max_seq_length, lora_rank
     )
     
     # Setup chat template
@@ -508,8 +517,24 @@ def main():
     reward_functions = setup_reward_functions(tokenizer)
     print(f"✅ Configured {len(reward_functions)} reward functions with NL→FOL and Prover9 verification")
     
+    # Create GRPO args object
+    class GRPOArgs:
+        def __init__(self):
+            self.grpo_max_steps = grpo_max_steps
+            self.grpo_batch_size = grpo_batch_size
+            self.grpo_gradient_accumulation_steps = grpo_gradient_accumulation_steps
+            self.grpo_learning_rate = grpo_learning_rate
+            self.num_generations = num_generations
+            self.temperature = temperature
+            self.grpo_logging_steps = grpo_logging_steps
+            self.grpo_save_steps = grpo_save_steps
+            self.grpo_output_dir = grpo_output_dir
+            self.max_seq_length = max_seq_length
+    
+    grpo_args = GRPOArgs()
+    
     # Train GRPO model
-    final_model_path = train_grpo_model(model, tokenizer, grpo_dataset, reward_functions, args)
+    final_model_path = train_grpo_model(model, tokenizer, grpo_dataset, reward_functions, grpo_args)
     
     print(f"\n🎉 Training pipeline completed successfully!")
     print(f"📁 Final model saved to: {final_model_path}")
@@ -517,6 +542,8 @@ def main():
     print(f"    from unsloth import FastLanguageModel")
     print(f"    model, tokenizer = FastLanguageModel.from_pretrained('{final_model_path}')")
     
+    wandb.finish()
+
     return final_model_path
 
 if __name__ == "__main__":

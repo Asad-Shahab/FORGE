@@ -154,6 +154,7 @@ def train_sft_model(model, tokenizer, dataset, args):
     
     # Training configuration
     training_args = SFTConfig(
+        ddp_find_unused_parameters=False, # For multiple-GPU
         dataset_text_field="text",
         per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
