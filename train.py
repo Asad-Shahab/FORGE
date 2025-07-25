@@ -425,7 +425,7 @@ def main():
     sft_output_dir = "./sft_models"
     
     # GRPO parameters
-    grpo_max_steps = 100  #CHANGE THIS TO 1250
+    grpo_max_steps = 1250
     grpo_batch_size = 4
     grpo_gradient_accumulation_steps = 3
     grpo_learning_rate = 5e-6
