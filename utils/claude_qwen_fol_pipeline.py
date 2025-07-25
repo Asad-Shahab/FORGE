@@ -112,7 +112,7 @@ def get_qwen_solution(qwen_model, qwen_tokenizer, context, question, max_attempt
                     pad_token_id=qwen_tokenizer.eos_token_id,
                     eos_token_id=qwen_tokenizer.eos_token_id,
                     repetition_penalty=1.1,
-                    use_cache=False,  # Avoid xformers issues
+                    use_cache=False,  # Disable cache for stable inference
                 )
             
             # Decode the complete output

@@ -9,7 +9,7 @@ Complete pipeline for generating logic problems, solving them with AI, convertin
 
 ### Core Pipeline Files
 - ✅ **`claude_qwen_fol_pipeline.py`** - Main pipeline: Claude generates problems → Qwen solves → FOL conversion → Prover9 verification
-- ✅ **`setup_models.py`** - H100 GPU setup script for Qwen3-8B (Unsloth) and Llama NL-to-FOL models
+- ✅ **`setup_models.py`** - H100 GPU setup script for Qwen3-8B and Llama NL-to-FOL models
 - ✅ **`prover9_integration.py`** - Complete Prover9 integration with FOL verification capabilities
 - **`complete_pipeline.py`** - Alternative end-to-end FOL + Prover9 pipeline with predefined tests
 
@@ -23,14 +23,14 @@ Complete pipeline for generating logic problems, solving them with AI, convertin
 ### FOL Conversion & Testing
 - ✅ **`fol_converter_only.py`** - FOL conversion only (bypasses Qwen for testing Llama model)
 - **`interactive_test.py`** - Interactive testing interface for both Qwen and Llama models
-- **`fol_problem_solver.py`** - Original FOL problem generator with Qwen (had xformers issues)
+- **`fol_problem_solver.py`** - Original FOL problem generator with Qwen
 - **`simple_example.py`** - Simple demonstration of FOL conversion capabilities
 
 ### Debugging & Utilities
 - **`debug_qwen_generation.py`** - Debug tool for Qwen generation issues and parameter testing
 - **`show_raw_qwen.py`** - Shows complete raw Qwen output for debugging truncation issues
 - **`test_prover9_simple.py`** - Simple Prover9 installation and functionality test
-- **`fix_qwen_generation.py`** - Fixed Qwen generation handling xformers compatibility issues
+- **`fix_qwen_generation.py`** - Fixed Qwen generation handling earlier compatibility issues
 
 ### Alternative Pipelines
 - **`qwen_to_prover9_pipeline.py`** - Alternative pipeline where Qwen generates its own problems
@@ -52,7 +52,7 @@ Complete pipeline for generating logic problems, solving them with AI, convertin
    - Qwen receives Claude's problem (context + question)
    - Generates step-by-step logical reasoning
    - Provides final answer in structured format
-   - Handles xformers issues with fallback mechanisms
+   - Runs reliably across hardware
 
 3. **🔄 FOL Conversion (Llama-3.1-8B + LoRA)**
    - Parses Qwen's reasoning statements

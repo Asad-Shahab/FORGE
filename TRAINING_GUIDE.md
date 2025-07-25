@@ -102,6 +102,15 @@ python train.py \
     --grpo_max_steps 1000
 ```
 
+### 5. Launch Training with Accelerate
+
+For multi-GPU setups, configure and run training via [Hugging Face Accelerate](https://github.com/huggingface/accelerate):
+
+```bash
+accelerate config    # run once to set up your environment
+accelerate launch train.py --grpo_max_steps 1000
+```
+
 ## Configuration Options
 
 ### SFT Training (`train_sft.py`)

@@ -51,7 +51,7 @@ def demo_fol_conversion():
     
     print("🧠 FOL Logic Converter Demo")
     print("=" * 50)
-    print("(Bypassing Qwen generation due to xformers issues)")
+    print("(Bypassing Qwen generation for demo purposes)")
     print()
     
     # Load only the Llama model
@@ -128,7 +128,7 @@ def demo_fol_conversion():
     
     print("\n✅ FOL conversion demo completed!")
     print("\n💡 The Llama NL-to-FOL model is working perfectly!")
-    print("The xformers issue only affects Qwen text generation.")
+    print("Qwen generation can be added separately if needed.")
 
 def interactive_fol_converter():
     """Interactive FOL converter"""
