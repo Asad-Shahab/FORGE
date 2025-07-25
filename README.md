@@ -18,17 +18,6 @@ A comprehensive pipeline for training and evaluating logical reasoning capabilit
 git clone <repository-url>
 cd logical-reasoning-pipeline
 
-# Create and activate conda environment
-conda create --name logic python=3.11 pytorch-cuda=12.1 pytorch cudatoolkit xformers -c pytorch -c nvidia -c xformers -y
-conda activate logic
-conda install -c nvidia cudnn -y
-conda install -c nvidia nccl -y
-pip install vllm unsloth
-```
-
-or 
-
-```bash
 conda create --name logic python=3.11 -y
 conda activate logic
 
@@ -60,25 +49,7 @@ print('✓')
 "
 ```
 
-### 2. Install Dependencies
-
-```bash
-# Core ML dependencies
-pip install torch transformers unsloth datasets
-pip3 install -U xformers --index-url https://download.pytorch.org/whl/cu126
-
-# Additional requirements
-pip install numpy pandas tqdm regex
-
-# Prover9 for logical verification (Linux)
-sudo apt-get update
-sudo apt-get install prover9
-
-# Prover9 for macOS (using Homebrew)
-brew install prover9
-```
-
-### 3. HuggingFace Authentication
+### 2. HuggingFace Authentication
 
 ```bash
 # Login to HuggingFace (required for model access)
@@ -87,7 +58,7 @@ huggingface-cli login
 # Enter your HuggingFace token when prompted
 ```
 
-### 4. Cache Configuration *(Optional - for university/cluster environments)*
+### 3. Cache Configuration *(Optional - for university/cluster environments)*
 
 If you're running on a university cluster or environment with restricted permissions:
 
@@ -103,16 +74,7 @@ export TRANSFORMERS_CACHE="./cache/transformers"
 mkdir -p ./cache/huggingface ./cache/transformers
 ```
 
-### 5. Dataset Preparation
-
-```bash
-# Download and process the ProverQA dataset
-python dataset/proverqa_processor.py
-```
-
-This creates `proverqa_simplified.json` containing 5,000 logical reasoning problems.
-
-### 6. Verify Installation
+### 4. Verify Installation
 
 Test each component to ensure proper setup:
 
@@ -147,7 +109,7 @@ print(f'Weights: {reward_calc.weights}')
 "
 ```
 
-### 7. Run the Pipeline
+### 5. Run the Pipeline
 
 ```bash
 # Execute the complete logical reasoning pipeline
