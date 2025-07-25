@@ -9,7 +9,7 @@ import json
 import os
 import torch
 from datasets import Dataset
-from unsloth import FastLanguageModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTTrainer, SFTConfig
 
 # Import from existing setup modules
@@ -127,10 +127,11 @@ def setup_model_for_sft(max_seq_length=2048, lora_rank=32):
     
     # Use setup function from setup/setup_models.py
     model, tokenizer = setup_qwen3()
-    
-    # Apply LoRA for training
-    model = FastLanguageModel.get_peft_model(
-        model,
+
+    # Apply LoRA for training using peft
+    from peft import LoraConfig, get_peft_model
+
+    lora_config = LoraConfig(
         r=lora_rank,
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
@@ -139,9 +140,9 @@ def setup_model_for_sft(max_seq_length=2048, lora_rank=32):
         lora_alpha=lora_rank * 2,
         lora_dropout=0.1,
         bias="none",
-        use_gradient_checkpointing="unsloth",
-        random_state=3407,
     )
+
+    model = get_peft_model(model, lora_config)
     
     return model, tokenizer
 
@@ -253,8 +254,9 @@ def main(args=None):
     print(f"\n🎉 SFT training completed successfully!")
     print(f"📁 Model saved to: {final_model_path}")
     print(f"💡 To use this model, load it with:")
-    print(f"    from unsloth import FastLanguageModel")
-    print(f"    model, tokenizer = FastLanguageModel.from_pretrained('{final_model_path}')")
+    print("    from transformers import AutoModelForCausalLM, AutoTokenizer")
+    print(f"    model = AutoModelForCausalLM.from_pretrained('{final_model_path}')")
+    print(f"    tokenizer = AutoTokenizer.from_pretrained('{final_model_path}')")
     
     return final_model_path
 
