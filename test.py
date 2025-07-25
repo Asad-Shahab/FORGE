@@ -1,12 +1,13 @@
 import json
 import os
-from unsloth import FastLanguageModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Use only one GPU
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Load the model
-model, tokenizer = FastLanguageModel.from_pretrained('./grpo_models/final')
+model = AutoModelForCausalLM.from_pretrained('./grpo_models/final')
+tokenizer = AutoTokenizer.from_pretrained('./grpo_models/final')
 
 # Load dataset
 with open('dataset/dev/hard.json', 'r') as f:
@@ -23,7 +24,8 @@ for item in dataset:
     
     # Decode the complete output
     complete_output = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    
+
     print(f"Complete output: {complete_output}")
     print(f"Expected answer: {expected_answer}")
     print("-" * 50)
+

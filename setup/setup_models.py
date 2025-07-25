@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Setup script for H100 GPU with Qwen3-8B Unsloth and Llama NL-to-FOL models
+Setup script for H100 GPU with Qwen3-8B and Llama NL-to-FOL models
 Run: python setup_models.py
 """
 
@@ -49,9 +49,8 @@ if not ensure_hf_auth():
 print()
 
 import torch
-from unsloth import FastLanguageModel
-from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 import sys
 
 def check_gpu():
@@ -67,15 +66,28 @@ def check_gpu():
     print()
 
 def setup_qwen3():
-    """Setup Qwen3-8B with Unsloth"""
-    print("🦥 Setting up Qwen3-8B with Unsloth...")
-    
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name="unsloth/Qwen3-8B-unsloth-bnb-4bit",
-        max_seq_length=3000,
+    """Load Qwen3-8B with optional 4-bit quantization"""
+    print("🚀 Loading Qwen3-8B...")
+
+    model_name = "Qwen/Qwen3-8B"
+
+    bnb_config = None
+    try:
+        from transformers import BitsAndBytesConfig
+        bnb_config = BitsAndBytesConfig(load_in_4bit=True)
+    except Exception:
+        pass
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
         device_map="auto",
-        dtype=None,  # Auto-detect
-        load_in_4bit=True,
+        trust_remote_code=True,
+        quantization_config=bnb_config,
+        torch_dtype=torch.bfloat16,
     )
     
     print("✅ Qwen3-8B loaded successfully!")

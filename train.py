@@ -12,10 +12,9 @@ import re
 import torch
 import wandb
 from datasets import Dataset
-from unsloth import FastLanguageModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer
 from vllm import SamplingParams
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Import from existing modules
 from setup.setup_models import setup_qwen3, setup_llama_lora
@@ -291,30 +290,40 @@ def setup_model_for_grpo(model_path=None, max_seq_length=3000, lora_rank=32):
     
     if model_path and os.path.exists(model_path):
         print(f"📂 Loading pre-trained model from {model_path}")
-        model, tokenizer = FastLanguageModel.from_pretrained(
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
             model_path,
-            max_seq_length=max_seq_length,
-            load_in_4bit=False,  
-            fast_inference=True,  
-            max_lora_rank=lora_rank,  
-            gpu_memory_utilization=0.7, 
-            dtype=None,
+            device_map="auto",
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16,
         )
     else:
         print("🔧 Loading base model for GRPO training...")
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name="unsloth/Qwen3-8B-unsloth-bnb-4bit",
-            max_seq_length=max_seq_length,
-            load_in_4bit=False, 
-            fast_inference=True,  
-            max_lora_rank=lora_rank,  
-            gpu_memory_utilization=0.7,  
-            dtype=None,
+        model_name = "Qwen/Qwen3-8B"
+
+        bnb_config = None
+        try:
+            from transformers import BitsAndBytesConfig
+            bnb_config = BitsAndBytesConfig(load_in_4bit=True)
+        except Exception:
+            pass
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            device_map="auto",
+            trust_remote_code=True,
+            quantization_config=bnb_config,
+            torch_dtype=torch.bfloat16,
         )
-        
-        # Apply LoRA for training
-        model = FastLanguageModel.get_peft_model(
-            model,
+
+        # Apply LoRA for training using peft
+        from peft import LoraConfig, get_peft_model
+
+        lora_config = LoraConfig(
             r=lora_rank,
             target_modules=[
                 "q_proj", "k_proj", "v_proj", "o_proj",
@@ -323,9 +332,9 @@ def setup_model_for_grpo(model_path=None, max_seq_length=3000, lora_rank=32):
             lora_alpha=lora_rank * 2,
             lora_dropout=0.1,
             bias="none",
-            use_gradient_checkpointing="unsloth",
-            random_state=3407,
         )
+
+        model = get_peft_model(model, lora_config)
     
     return model, tokenizer
 
@@ -532,8 +541,9 @@ def main():
     print(f"\n🎉 Training pipeline completed successfully!")
     print(f"📁 Final model saved to: {final_model_path}")
     print(f"💡 To use this model, load it with:")
-    print(f"    from unsloth import FastLanguageModel")
-    print(f"    model, tokenizer = FastLanguageModel.from_pretrained('{final_model_path}')")
+    print("    from transformers import AutoModelForCausalLM, AutoTokenizer")
+    print(f"    model = AutoModelForCausalLM.from_pretrained('{final_model_path}')")
+    print(f"    tokenizer = AutoTokenizer.from_pretrained('{final_model_path}')")
     
     wandb.finish()
 
