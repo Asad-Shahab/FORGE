@@ -1,0 +1,6 @@
+compute_environment: LOCAL_MACHINE
+distributed_type: FSDP
+fsdp_config:
+  fsdp_min_num_params: 100000000
+mixed_precision: bf16
+num_processes: 4

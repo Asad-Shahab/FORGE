@@ -10,7 +10,8 @@ import os
 import torch
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import SFTTrainer, SFTConfig
+from accelerate import Accelerator
+from torch.utils.data import DataLoader
 
 # Import from existing setup modules
 from setup.setup_models import setup_qwen3
@@ -149,44 +150,56 @@ def setup_model_for_sft(max_seq_length=2048, lora_rank=32):
 def train_sft_model(model, tokenizer, dataset, args):
     """Train SFT model with configuration"""
     print("🎯 Starting SFT training...")
-    
-    # Create output directory
+
+    accelerator = Accelerator(
+        gradient_accumulation_steps=args.gradient_accumulation_steps
+    )
+
     os.makedirs(args.output_dir, exist_ok=True)
-    
-    # Training configuration
-    training_args = SFTConfig(
-        dataset_text_field="text",
-        per_device_train_batch_size=args.batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        warmup_steps=args.warmup_steps,
-        num_train_epochs=args.epochs,
-        max_steps=args.max_steps if args.max_steps > 0 else -1,
-        learning_rate=args.learning_rate,
-        logging_steps=args.logging_steps,
-        save_steps=args.save_steps,
-        optim="adamw_8bit",
-        seed=3407,
-        output_dir=args.output_dir,
-        report_to="none",
-        save_total_limit=2,
+
+    def collate_fn(batch):
+        texts = [example["text"] for example in batch]
+        tokenized = tokenizer(
+            texts,
+            padding=True,
+            truncation=True,
+            max_length=args.max_seq_length,
+            return_tensors="pt",
+        )
+        tokenized["labels"] = tokenized["input_ids"].clone()
+        return tokenized
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
     )
-    
-    # Initialize trainer
-    trainer = SFTTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        train_dataset=dataset,
-        args=training_args,
-    )
-    
-    # Train
-    trainer.train()
-    
-    # Save final model
+
+    model, dataloader = accelerator.prepare(model, dataloader)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+
+    model.train()
+    for epoch in range(args.epochs):
+        for step, batch in enumerate(dataloader):
+            with accelerator.accumulate(model):
+                outputs = model(**batch)
+                loss = outputs.loss
+                accelerator.backward(loss)
+                optimizer.step()
+                optimizer.zero_grad()
+
+            if accelerator.is_main_process and (step + 1) % args.logging_steps == 0:
+                print(f"epoch {epoch+1} step {step+1} loss {loss.item():.4f}")
+        accelerator.wait_for_everyone()
+
     final_dir = os.path.join(args.output_dir, "final")
-    model.save_pretrained(final_dir)
-    tokenizer.save_pretrained(final_dir)
-    
+    if accelerator.is_main_process:
+        os.makedirs(final_dir, exist_ok=True)
+        accelerator.unwrap_model(model).save_pretrained(final_dir)
+        tokenizer.save_pretrained(final_dir)
+    accelerator.wait_for_everyone()
+
     print(f"✅ SFT training complete! Model saved to {final_dir}")
     return final_dir
 

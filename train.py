@@ -14,6 +14,7 @@ import wandb
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer
+from accelerate import Accelerator
 from vllm import SamplingParams
 
 # Import from existing modules
@@ -341,7 +342,10 @@ def setup_model_for_grpo(model_path=None, max_seq_length=3000, lora_rank=32):
 def train_grpo_model(model, tokenizer, dataset, reward_functions, args):
     """Train GRPO model with reward functions"""
     print("🎯 Starting GRPO training with full pipeline rewards...")
-    
+    accelerator = Accelerator(
+        gradient_accumulation_steps=args.grpo_gradient_accumulation_steps
+    )
+
     # Create output directory
     os.makedirs(args.grpo_output_dir, exist_ok=True)
     
@@ -389,6 +393,9 @@ def train_grpo_model(model, tokenizer, dataset, reward_functions, args):
         save_total_limit=2,
     )
     
+    # Prepare model for distributed training
+    model = accelerator.prepare(model)
+
     # Initialize trainer
     trainer = GRPOTrainer(
         model=model,
@@ -400,11 +407,13 @@ def train_grpo_model(model, tokenizer, dataset, reward_functions, args):
 
     # Train
     trainer.train()
-    
+
     # Save final model
     final_dir = os.path.join(args.grpo_output_dir, "final")
-    model.save_pretrained(final_dir)
-    tokenizer.save_pretrained(final_dir)
+    if accelerator.is_main_process:
+        accelerator.unwrap_model(model).save_pretrained(final_dir)
+        tokenizer.save_pretrained(final_dir)
+    accelerator.wait_for_everyone()
     
     print(f"✅ GRPO training complete! Model saved to {final_dir}")
     return final_dir
