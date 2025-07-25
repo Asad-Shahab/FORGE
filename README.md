@@ -116,6 +116,13 @@ print(f'Weights: {reward_calc.weights}')
 python pipeline_with_rewards.py
 ```
 
+### 6. Train with Accelerate
+
+```bash
+accelerate config      # set number of GPUs (e.g. 4 H100s)
+accelerate launch train.py [args]
+```
+
 ### Expected Directory Structure
 
 After successful setup, your directory should look like:
