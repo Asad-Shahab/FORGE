@@ -24,17 +24,16 @@ conda activate logic
 # Install vLLM first (this will install PyTorch with proper NCCL setup)
 pip install vllm
 
-# Install xformers separately (needed for unsloth)
-pip install xformers
-
 # Install remaining packages
-pip install accelerate unsloth
+pip install accelerate transformers
+
+# Configure Accelerate (for multi-GPU training)
+accelerate config
 
 # Test everything
 python -c "
 import torch
 import accelerate
-import xformers
 print('PyTorch version:', torch.__version__)
 print('CUDA available:', torch.cuda.is_available())
 print('CUDA version:', torch.version.cuda)
@@ -42,7 +41,6 @@ print('GPU count:', torch.cuda.device_count())
 if torch.cuda.is_available():
     print('GPU name:', torch.cuda.get_device_name(0))
 print('Accelerate version:', accelerate.__version__)
-print('Xformers version:', xformers.__version__)
 print('vLLM import test...', end=' ')
 import vllm
 print('✓')
