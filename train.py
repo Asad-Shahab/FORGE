@@ -213,8 +213,16 @@ Start your answer with '𝜙=' followed by the FOL formula. Do not include any o
     
     return fol_statements
 
-def setup_reward_functions(tokenizer):
-    """Setup reward functions with full pipeline integration"""
+def setup_reward_functions(tokenizer, accelerator):
+    """Setup reward functions with full pipeline integration
+
+    Parameters
+    ----------
+    tokenizer : AutoTokenizer
+        Tokenizer used for chat template.
+    accelerator : Accelerator
+        Accelerator used to guard logging so only the main process writes to wandb.
+    """
     print("🔧 Loading Llama model for NL→FOL conversion...")
     
     # Load Llama model for NL→FOL conversion
@@ -266,12 +274,13 @@ def setup_reward_functions(tokenizer):
                 )
 
                 if i < 5:  # Log first 5 examples per batch to avoid spam
-                    wandb.log({
-                        f"reward/answer_correctness": reward_components.answer_correctness,
-                        f"reward/logical_validity": reward_components.logical_validity, 
-                        f"reward/format_compliance": reward_components.format_compliance,
-                        f"reward/prover9_valid": verification_result.get('valid', False),
-                    })
+                    if accelerator.is_main_process:
+                        wandb.log({
+                            f"reward/answer_correctness": reward_components.answer_correctness,
+                            f"reward/logical_validity": reward_components.logical_validity,
+                            f"reward/format_compliance": reward_components.format_compliance,
+                            f"reward/prover9_valid": verification_result.get('valid', False),
+                        })
                 
                 # Scale reward for GRPO (typically 0-10 range works well)
                 scaled_reward = reward_components.total_reward * 10.0
@@ -522,10 +531,11 @@ def main():
     print("📝 Formatting dataset for GRPO training...")
     grpo_dataset = format_grpo_dataset(grpo_data, system_prompt, tokenizer)
     print(f"📊 Formatted {len(grpo_dataset)} examples")
-    
+
     # Setup reward functions with full pipeline
     print("🎯 Setting up reward functions with full pipeline...")
-    reward_functions = setup_reward_functions(tokenizer)
+    accelerator = Accelerator()
+    reward_functions = setup_reward_functions(tokenizer, accelerator)
     print(f"✅ Configured {len(reward_functions)} reward functions with NL→FOL and Prover9 verification")
     
     # Create GRPO args object
