@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Setup script for H100 GPU with Qwen3-8B Unsloth and Llama NL-to-FOL models
+Setup script for H100 GPU with Qwen3-8B and Llama NL-to-FOL models
+Multi-GPU compatible version
 Run: python setup_models.py
 """
 
 # IMPORTANT: Setup cache directories FIRST before importing ML libraries
-from .setup_cache import setup_cache_directories
+from setup_cache import setup_cache_directories
 print("🗂️  Configuring cache directories...")
 cache_dirs = setup_cache_directories()
 
@@ -13,6 +14,8 @@ cache_dirs = setup_cache_directories()
 print("🔑 Checking Hugging Face authentication...")
 import os
 from pathlib import Path
+import torch
+import torch.distributed as dist
 
 def ensure_hf_auth():
     """Ensure HF authentication is working"""
@@ -48,10 +51,8 @@ if not ensure_hf_auth():
 
 print()
 
-import torch
-from unsloth import FastLanguageModel
-from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 import sys
 
 def check_gpu():
@@ -60,34 +61,78 @@ def check_gpu():
         print("❌ CUDA not available!")
         sys.exit(1)
     
-    print(f"✅ CUDA available: {torch.cuda.get_device_name(0)}")
-    print(f"📊 GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+    num_gpus = torch.cuda.device_count()
+    print(f"✅ CUDA available with {num_gpus} GPU(s)")
+    
+    for i in range(num_gpus):
+        print(f"  GPU {i}: {torch.cuda.get_device_name(i)}")
+        print(f"  Memory: {torch.cuda.get_device_properties(i).total_memory / 1e9:.1f} GB")
+    
     print(f"🔧 CUDA Version: {torch.version.cuda}")
     print(f"🔧 PyTorch Version: {torch.__version__}")
     print()
-
-def setup_qwen3():
-    """Setup Qwen3-8B with Unsloth"""
-    print("🦥 Setting up Qwen3-8B with Unsloth...")
     
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name="unsloth/Qwen3-8B-unsloth-bnb-4bit",
-        max_seq_length=3000,
-        device_map="auto",
-        dtype=None,  # Auto-detect
-        load_in_4bit=True,
-    )
+    return num_gpus
+
+def setup_qwen3(device=None, use_quantization=True):
+    """Load Qwen3-8B with optional 4-bit quantization
+    
+    Args:
+        device: Specific device to load model on (for distributed training)
+        use_quantization: Whether to use 4-bit quantization
+    """
+    print("🚀 Loading Qwen3-8B...")
+
+    model_name = "Qwen/Qwen3-8B"
+
+    bnb_config = None
+    if use_quantization:
+        try:
+            from transformers import BitsAndBytesConfig
+            bnb_config = BitsAndBytesConfig(load_in_4bit=True)
+        except Exception:
+            pass
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # For distributed training, don't use device_map="auto"
+    if device is not None:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            trust_remote_code=True,
+            quantization_config=bnb_config,
+            torch_dtype=torch.bfloat16,
+        )
+        model = model.to(device)
+    else:
+        # Single GPU or CPU mode
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            device_map="auto",
+            trust_remote_code=True,
+            quantization_config=bnb_config,
+            torch_dtype=torch.bfloat16,
+        )
     
     print("✅ Qwen3-8B loaded successfully!")
-    print(f"📍 Model device: {next(model.parameters()).device}")
+    if device is not None:
+        print(f"📍 Model device: {device}")
+    else:
+        print(f"📍 Model device: {next(model.parameters()).device}")
     print(f"📏 Max sequence length: {model.config.max_position_embeddings}")
     print(f"🔢 Number of parameters: {model.num_parameters():,}")
     print()
     
     return model, tokenizer
 
-def setup_llama_lora():
-    """Setup Llama-3.1-8B with NL-to-FOL LoRA"""
+def setup_llama_lora(device=None):
+    """Setup Llama-3.1-8B with NL-to-FOL LoRA
+    
+    Args:
+        device: Specific device to load model on (for distributed training)
+    """
     print("🦙 Setting up Llama-3.1-8B with NL-to-FOL LoRA...")
     
     base_model_name = "meta-llama/Llama-3.1-8B-Instruct"
@@ -107,28 +152,56 @@ def setup_llama_lora():
     tokenizer_lora.padding_side = "left"
     
     # Load base model with explicit token
-    model_lora = AutoModelForCausalLM.from_pretrained(
-        base_model_name, 
-        trust_remote_code=True, 
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
-        token=token
-    )
+    if device is not None:
+        model_lora = AutoModelForCausalLM.from_pretrained(
+            base_model_name, 
+            trust_remote_code=True, 
+            torch_dtype=torch.bfloat16,
+            token=token
+        )
+        model_lora = model_lora.to(device)
+    else:
+        model_lora = AutoModelForCausalLM.from_pretrained(
+            base_model_name, 
+            trust_remote_code=True, 
+            device_map="auto",
+            torch_dtype=torch.bfloat16,
+            token=token
+        )
     
     # Load LoRA adapter
     model_lora = PeftModel.from_pretrained(
         model_lora, 
         lora_weights, 
-        device_map="auto",
+        device_map=None if device is not None else "auto",
         token=token
     )
     
     print("✅ Llama LoRA model loaded successfully!")
-    print(f"📍 Model device: {next(model_lora.parameters()).device}")
+    if device is not None:
+        print(f"📍 Model device: {device}")
+    else:
+        print(f"📍 Model device: {next(model_lora.parameters()).device}")
     print(f"🔢 Base model parameters: {model_lora.base_model.num_parameters():,}")
     print()
     
     return model_lora, tokenizer_lora
+
+def is_distributed():
+    """Check if running in distributed mode"""
+    return dist.is_available() and dist.is_initialized()
+
+def get_rank():
+    """Get current process rank"""
+    if is_distributed():
+        return dist.get_rank()
+    return 0
+
+def get_world_size():
+    """Get total number of processes"""
+    if is_distributed():
+        return dist.get_world_size()
+    return 1
 
 def test_qwen3(model, tokenizer):
     """Test Qwen3 model with sample generation"""
@@ -186,6 +259,9 @@ def test_llama_lora(model_lora, tokenizer_lora):
         prompt = formatting_func(input_text)
         inputs = tokenizer_lora(prompt, return_tensors="pt", padding=True)
         
+        device = next(model_lora.parameters()).device
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        
         with torch.no_grad():
             outputs = model_lora.generate(
                 **inputs, 
@@ -221,11 +297,14 @@ def main():
     print("🚀 Starting H100 GPU setup...\n")
     
     # Check GPU
-    check_gpu()
+    num_gpus = check_gpu()
+    
+    # Determine device for single GPU mode
+    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
     
     # Setup models
-    qwen_model, qwen_tokenizer = setup_qwen3()
-    llama_model, llama_tokenizer = setup_llama_lora()
+    qwen_model, qwen_tokenizer = setup_qwen3(device=None)  # Use auto device mapping for testing
+    llama_model, llama_tokenizer = setup_llama_lora(device=None)
     
     # Test models
     qwen_generate = test_qwen3(qwen_model, qwen_tokenizer)
