@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Standalone SFT Training for Logical Reasoning
-Follows architectural patterns from pipeline_dev.py
+Multi-GPU compatible version
 """
 
 import argparse
@@ -10,14 +10,16 @@ import os
 import torch
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
 from torch.utils.data import DataLoader
 
-# Import from existing setup modules
+# Import from existing setup modules - Fix the import path
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from setup.setup_models import setup_qwen3
 
 def setup_chat_template(tokenizer):
-    """Setup chat template following pipeline_dev.py patterns"""
+    """Setup chat template following pipeline patterns"""
     reasoning_start = "<initial_reasoning>"
     reasoning_end = "</initial_reasoning>"
     steps_start = "<steps>"
@@ -59,7 +61,7 @@ For the steps section, write simple, clear statements in natural language. Each 
     return tokenizer, system_prompt
 
 def load_sft_dataset(dataset_path, max_examples=None):
-    """Load and format SFT dataset following pipeline_dev.py patterns"""
+    """Load and format SFT dataset"""
     print(f"📂 Loading SFT dataset from {dataset_path}")
     
     with open(dataset_path, 'r') as f:
@@ -122,12 +124,16 @@ def format_sft_examples(data, tokenizer, system_prompt):
     
     return Dataset.from_list(formatted_data)
 
-def setup_model_for_sft(max_seq_length=2048, lora_rank=32):
-    """Setup model for SFT training using setup functions"""
+def setup_model_for_sft(max_seq_length=2048, lora_rank=32, device=None):
+    """Setup model for SFT training with multi-GPU support"""
     print("🚀 Setting up model for SFT training...")
     
+    # Determine if we're in distributed mode
+    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    use_quantization = world_size == 1  # Only use quantization for single GPU
+    
     # Use setup function from setup/setup_models.py
-    model, tokenizer = setup_qwen3()
+    model, tokenizer = setup_qwen3(device=device, use_quantization=use_quantization)
 
     # Apply LoRA for training using peft
     from peft import LoraConfig, get_peft_model
@@ -145,14 +151,22 @@ def setup_model_for_sft(max_seq_length=2048, lora_rank=32):
 
     model = get_peft_model(model, lora_config)
     
+    # Enable gradient checkpointing if requested
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
+    
     return model, tokenizer
 
 def train_sft_model(model, tokenizer, dataset, args):
     """Train SFT model with configuration"""
     print("🎯 Starting SFT training...")
 
+    # Setup accelerator with proper config for multi-GPU
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(
-        gradient_accumulation_steps=args.gradient_accumulation_steps
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        mixed_precision="bf16" if args.use_mixed_precision else None,
+        kwargs_handlers=[ddp_kwargs] if int(os.environ.get('WORLD_SIZE', 1)) > 1 else None,
     )
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -169,38 +183,85 @@ def train_sft_model(model, tokenizer, dataset, args):
         tokenized["labels"] = tokenized["input_ids"].clone()
         return tokenized
 
+    # Create dataloader with proper batch size for distributed training
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
         shuffle=True,
         collate_fn=collate_fn,
+        num_workers=2,
     )
 
-    model, dataloader = accelerator.prepare(model, dataloader)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    # Setup optimizer
+    optimizer = torch.optim.AdamW(
+        model.parameters(), 
+        lr=args.learning_rate,
+        weight_decay=0.01
+    )
 
+    # Prepare for distributed training
+    model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
+
+    # Training loop
     model.train()
+    global_step = 0
+    
     for epoch in range(args.epochs):
+        epoch_loss = 0
+        num_batches = 0
+        
         for step, batch in enumerate(dataloader):
             with accelerator.accumulate(model):
                 outputs = model(**batch)
                 loss = outputs.loss
                 accelerator.backward(loss)
+                
+                # Gradient clipping
+                accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                
                 optimizer.step()
                 optimizer.zero_grad()
+                
+                epoch_loss += loss.detach().float()
+                num_batches += 1
+                global_step += 1
 
+            # Logging
             if accelerator.is_main_process and (step + 1) % args.logging_steps == 0:
-                print(f"epoch {epoch+1} step {step+1} loss {loss.item():.4f}")
-        accelerator.wait_for_everyone()
-
+                avg_loss = epoch_loss / num_batches
+                print(f"Epoch {epoch+1}/{args.epochs} | Step {step+1} | Loss: {avg_loss:.4f}")
+            
+            # Saving
+            if accelerator.is_main_process and args.save_steps > 0 and (global_step % args.save_steps == 0):
+                save_dir = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                os.makedirs(save_dir, exist_ok=True)
+                accelerator.unwrap_model(model).save_pretrained(save_dir)
+                tokenizer.save_pretrained(save_dir)
+                print(f"💾 Saved checkpoint to {save_dir}")
+            
+            # Max steps limit
+            if args.max_steps > 0 and global_step >= args.max_steps:
+                break
+        
+        if args.max_steps > 0 and global_step >= args.max_steps:
+            break
+        
+        # End of epoch logging
+        if accelerator.is_main_process:
+            avg_loss = epoch_loss / num_batches
+            print(f"✅ Epoch {epoch+1}/{args.epochs} completed | Average Loss: {avg_loss:.4f}")
+    
+    # Save final model
+    accelerator.wait_for_everyone()
+    
     final_dir = os.path.join(args.output_dir, "final")
     if accelerator.is_main_process:
         os.makedirs(final_dir, exist_ok=True)
         accelerator.unwrap_model(model).save_pretrained(final_dir)
         tokenizer.save_pretrained(final_dir)
+        print(f"✅ SFT training complete! Model saved to {final_dir}")
+    
     accelerator.wait_for_everyone()
-
-    print(f"✅ SFT training complete! Model saved to {final_dir}")
     return final_dir
 
 def main(args=None):
@@ -242,16 +303,31 @@ def main(args=None):
         parser.add_argument("--output_dir", type=str, default="./sft_models",
                           help="Output directory")
         
+        # Optimization
+        parser.add_argument("--use_mixed_precision", action="store_true",
+                          help="Use mixed precision training")
+        
         args = parser.parse_args()
     
     print("🧠 SFT Training for Logical Reasoning")
     print("=" * 50)
     
+    # Check if we're in distributed mode
+    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    
+    if world_size > 1:
+        print(f"🌐 Running in distributed mode: Rank {local_rank}/{world_size}")
+        device = torch.device(f'cuda:{local_rank}')
+    else:
+        print("🖥️ Running in single GPU/CPU mode")
+        device = None
+    
     # Load dataset
     raw_data = load_sft_dataset(args.dataset, args.max_examples)
     
     # Setup model
-    model, tokenizer = setup_model_for_sft(args.max_seq_length, args.lora_rank)
+    model, tokenizer = setup_model_for_sft(args.max_seq_length, args.lora_rank, device)
     
     # Setup chat template
     tokenizer, system_prompt = setup_chat_template(tokenizer)
@@ -264,12 +340,13 @@ def main(args=None):
     # Train model
     final_model_path = train_sft_model(model, tokenizer, formatted_dataset, args)
     
-    print(f"\n🎉 SFT training completed successfully!")
-    print(f"📁 Model saved to: {final_model_path}")
-    print(f"💡 To use this model, load it with:")
-    print("    from transformers import AutoModelForCausalLM, AutoTokenizer")
-    print(f"    model = AutoModelForCausalLM.from_pretrained('{final_model_path}')")
-    print(f"    tokenizer = AutoTokenizer.from_pretrained('{final_model_path}')")
+    if local_rank == 0:
+        print(f"\n🎉 SFT training completed successfully!")
+        print(f"📁 Model saved to: {final_model_path}")
+        print(f"💡 To use this model, load it with:")
+        print("    from transformers import AutoModelForCausalLM, AutoTokenizer")
+        print(f"    model = AutoModelForCausalLM.from_pretrained('{final_model_path}')")
+        print(f"    tokenizer = AutoTokenizer.from_pretrained('{final_model_path}')")
     
     return final_model_path
 

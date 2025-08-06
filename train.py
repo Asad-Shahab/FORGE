@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-GRPO Training Pipeline for Logical Reasoning
-Integrates SFT pre-training and GRPO training with full pipeline reward functions
-Includes NL→FOL conversion and Prover9 verification during training
+GRPO Training Pipeline for Logical Reasoning with Multi-GPU Support
+Supports 2-4 H100 GPUs with configurable settings
 """
 
 import argparse
@@ -10,21 +9,67 @@ import json
 import os
 import re
 import torch
+import torch.distributed as dist
 import wandb
 from datasets import Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import GRPOConfig, GRPOTrainer
-from accelerate import Accelerator
-from vllm import SamplingParams
+from accelerate import Accelerator, DistributedDataParallelKwargs
+from accelerate.utils import set_seed
+import warnings
 
-# Import from existing modules
+# Import from existing modules - Fix paths
 from setup.setup_models import setup_qwen3, setup_llama_lora
 from reward.reward import LogicalReasoningReward
 from verification.prover9_integration import verify_reasoning_with_prover9, test_prover9_installation
 from train_sft import main as train_sft_main
 
+# Suppress warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
+def setup_distributed_training(num_gpus=None):
+    """Setup distributed training environment
+    
+    Args:
+        num_gpus: Number of GPUs to use (None = use all available)
+    
+    Returns:
+        rank, world_size, device
+    """
+    if num_gpus is None:
+        num_gpus = torch.cuda.device_count()
+    
+    # Set CUDA_VISIBLE_DEVICES if limiting GPUs
+    if num_gpus < torch.cuda.device_count():
+        visible_devices = ','.join(str(i) for i in range(num_gpus))
+        os.environ['CUDA_VISIBLE_DEVICES'] = visible_devices
+        print(f"🎯 Limited to {num_gpus} GPUs: {visible_devices}")
+    
+    # Initialize distributed training if not already done
+    if not dist.is_initialized():
+        # Set default environment variables for distributed training
+        if 'RANK' not in os.environ:
+            os.environ['RANK'] = '0'
+        if 'WORLD_SIZE' not in os.environ:
+            os.environ['WORLD_SIZE'] = str(num_gpus)
+        if 'LOCAL_RANK' not in os.environ:
+            os.environ['LOCAL_RANK'] = '0'
+        
+        # For multi-node training (optional)
+        if 'MASTER_ADDR' not in os.environ:
+            os.environ['MASTER_ADDR'] = 'localhost'
+        if 'MASTER_PORT' not in os.environ:
+            os.environ['MASTER_PORT'] = '29500'
+    
+    # Get device info
+    local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    device = torch.device(f'cuda:{local_rank}' if torch.cuda.is_available() else 'cpu')
+    
+    return local_rank, world_size, device
+
 def setup_chat_template(tokenizer):
-    """Setup chat template following pipeline_dev.py patterns"""
+    """Setup chat template following pipeline patterns"""
     reasoning_start = "<initial_reasoning>"
     reasoning_end = "</initial_reasoning>"
     steps_start = "<steps>"
@@ -60,7 +105,7 @@ def setup_chat_template(tokenizer):
     return tokenizer, system_prompt
 
 def load_grpo_dataset(dataset_path, max_examples=None):
-    """Load GRPO dataset following pipeline_dev.py patterns"""
+    """Load GRPO dataset"""
     print(f"📂 Loading GRPO dataset from {dataset_path}")
     
     with open(dataset_path, 'r') as f:
@@ -98,7 +143,7 @@ def format_grpo_dataset(data, system_prompt, tokenizer):
     return Dataset.from_list(formatted_data)
 
 def parse_qwen_solution(qwen_output):
-    """Parse Qwen's solution to extract reasoning and answer (from pipeline_dev.py)"""
+    """Parse Qwen's solution to extract reasoning and answer"""
     
     # Extract answer
     answer_match = re.search(r'<answer>(.*?)</answer>', qwen_output, re.DOTALL | re.IGNORECASE)
@@ -136,7 +181,7 @@ def parse_qwen_solution(qwen_output):
     return reasoning_statements, answer
 
 def convert_reasoning_to_fol(reasoning_statements, llama_model, llama_tokenizer):
-    """Convert reasoning statements to FOL using Llama (from pipeline_dev.py)"""
+    """Convert reasoning statements to FOL using Llama"""
 
     improved_system_prompt = """You are an expert at converting natural language statements into First-Order Logic (FOL). Follow these strict rules:
 
@@ -156,12 +201,6 @@ VARIABLE RULES:
 - Never use unbound variables
 - If you use ∃x or ∀x, make sure x appears in the formula
 - For specific people, use their name directly as a constant
-
-EXAMPLES:
-"John is tall" → Tall(john)
-"If someone is weak, they are not resilient" → all x (Weak(x) → ¬Resilient(x))
-"Mary is either smart or funny" → Smart(mary) ∨ Funny(mary)
-"Everyone who studies passes" → all x (Studies(x) → Passes(x))
 
 Start your answer with '𝜙=' followed by the FOL formula. Do not include any other text."""
 
@@ -213,21 +252,20 @@ Start your answer with '𝜙=' followed by the FOL formula. Do not include any o
     
     return fol_statements
 
-def setup_reward_functions(tokenizer, accelerator):
+def setup_reward_functions(tokenizer, accelerator, device=None):
     """Setup reward functions with full pipeline integration
-
-    Parameters
-    ----------
-    tokenizer : AutoTokenizer
-        Tokenizer used for chat template.
-    accelerator : Accelerator
-        Accelerator used to guard logging so only the main process writes to wandb.
+    
+    Args:
+        tokenizer: Tokenizer for chat template
+        accelerator: Accelerator for distributed training
+        device: Device to load Llama model on
     """
     print("🔧 Loading Llama model for NL→FOL conversion...")
     
     # Load Llama model for NL→FOL conversion
     try:
-        llama_model, llama_tokenizer = setup_llama_lora()
+        # For distributed training, load on specific device
+        llama_model, llama_tokenizer = setup_llama_lora(device=device)
         print("✅ Llama model loaded successfully")
     except Exception as e:
         print(f"❌ Failed to load Llama model: {e}")
@@ -273,20 +311,22 @@ def setup_reward_functions(tokenizer, accelerator):
                     reasoning_steps=reasoning_statements
                 )
 
-                if i < 5:  # Log first 5 examples per batch to avoid spam
-                    if accelerator.is_main_process:
-                        wandb.log({
-                            f"reward/answer_correctness": reward_components.answer_correctness,
-                            f"reward/logical_validity": reward_components.logical_validity,
-                            f"reward/format_compliance": reward_components.format_compliance,
-                            f"reward/prover9_valid": verification_result.get('valid', False),
-                        })
+                # Log only from main process
+                if i < 5 and accelerator.is_main_process:
+                    wandb.log({
+                        f"reward/answer_correctness": reward_components.answer_correctness,
+                        f"reward/logical_validity": reward_components.logical_validity,
+                        f"reward/format_compliance": reward_components.format_compliance,
+                        f"reward/prover9_valid": verification_result.get('valid', False),
+                    })
                 
                 # Scale reward for GRPO (typically 0-10 range works well)
                 scaled_reward = reward_components.total_reward * 10.0
                 scores.append(scaled_reward)
                 
             except Exception as e:
+                if accelerator.is_main_process:
+                    print(f"⚠️ Error in reward computation: {e}")
                 scores.append(-1.0)  # Penalty for failed processing
         
         return scores
@@ -294,41 +334,60 @@ def setup_reward_functions(tokenizer, accelerator):
     # Return single comprehensive reward function
     return [compute_full_pipeline_reward]
 
-def setup_model_for_grpo(model_path=None, max_seq_length=3000, lora_rank=32):
-    """Setup model for GRPO training"""
+def setup_model_for_grpo(model_path=None, max_seq_length=3000, lora_rank=32, device=None):
+    """Setup model for GRPO training with multi-GPU support
+    
+    Args:
+        model_path: Path to pre-trained model
+        max_seq_length: Maximum sequence length
+        lora_rank: LoRA rank for parameter efficiency
+        device: Device to load model on (for distributed training)
+    """
     print("🚀 Setting up model for GRPO training...")
     
     if model_path and os.path.exists(model_path):
         print(f"📂 Loading pre-trained model from {model_path}")
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        
+        # Don't use device_map="auto" for distributed training
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
-            device_map="auto",
             trust_remote_code=True,
             torch_dtype=torch.bfloat16,
         )
+        
+        if device is not None:
+            model = model.to(device)
     else:
         print("🔧 Loading base model for GRPO training...")
         model_name = "Qwen/Qwen3-8B"
 
-        bnb_config = None
-        try:
-            from transformers import BitsAndBytesConfig
-            bnb_config = BitsAndBytesConfig(load_in_4bit=True)
-        except Exception:
-            pass
-
+        # Only use quantization in single-GPU mode
+        use_quantization = device is None or torch.cuda.device_count() == 1
+        
         tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
+        # Load model without device_map for distributed training
+        if use_quantization:
+            try:
+                from transformers import BitsAndBytesConfig
+                bnb_config = BitsAndBytesConfig(load_in_4bit=True)
+            except:
+                bnb_config = None
+        else:
+            bnb_config = None
+
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            device_map="auto",
             trust_remote_code=True,
             quantization_config=bnb_config,
             torch_dtype=torch.bfloat16,
         )
+        
+        if device is not None:
+            model = model.to(device)
 
         # Apply LoRA for training using peft
         from peft import LoraConfig, get_peft_model
@@ -348,43 +407,45 @@ def setup_model_for_grpo(model_path=None, max_seq_length=3000, lora_rank=32):
     
     return model, tokenizer
 
-def train_grpo_model(model, tokenizer, dataset, reward_functions, args):
-    """Train GRPO model with reward functions"""
-    print("🎯 Starting GRPO training with full pipeline rewards...")
+def train_grpo_model_distributed(model, tokenizer, dataset, reward_functions, args, device):
+    """Train GRPO model with multi-GPU support
+    
+    Note: VLLM with multi-GPU in GRPO is complex. We'll use standard generation instead.
+    """
+    print("🎯 Starting GRPO training with multi-GPU support...")
+    
+    # Setup accelerator with proper distributed config
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(
-        gradient_accumulation_steps=args.grpo_gradient_accumulation_steps
+        gradient_accumulation_steps=args.grpo_gradient_accumulation_steps,
+        kwargs_handlers=[ddp_kwargs],
+        mixed_precision="bf16" if args.use_mixed_precision else None,
     )
-
+    
     # Create output directory
     os.makedirs(args.grpo_output_dir, exist_ok=True)
     
-    max_prompt_length = 1000  # Adjust based on your prompts
+    max_prompt_length = 1000
     max_completion_length = args.max_seq_length - max_prompt_length
 
-    # VLLM sampling parameters
-    vllm_sampling_params = SamplingParams(
-        min_p=0.1,
-        top_p=1.0,
-        top_k=-1,
-        seed=3407,
-        stop=[tokenizer.eos_token],
-        include_stop_str_in_output=True,
-    )
+    # For multi-GPU, we need to use standard generation instead of VLLM
+    # VLLM requires complex setup for multi-GPU that conflicts with TRL
     
     # Training configuration
     training_args = GRPOConfig(
-        # Sampling parameters
-        vllm_sampling_params=vllm_sampling_params,
+        # Generation parameters (no VLLM for multi-GPU)
         temperature=args.temperature,
+        top_p=0.95,
+        top_k=50,
         
         # Training parameters
         learning_rate=args.grpo_learning_rate,
         weight_decay=0.01,
         warmup_ratio=0.1,
         lr_scheduler_type="linear",
-        optim="adamw_8bit",
+        optim="adamw_torch" if not args.use_8bit_optimizer else "adamw_8bit",
         
-        # Batch and steps
+        # Batch and steps - scale by world size
         per_device_train_batch_size=args.grpo_batch_size,
         gradient_accumulation_steps=args.grpo_gradient_accumulation_steps,
         num_generations=args.num_generations,
@@ -398,13 +459,18 @@ def train_grpo_model(model, tokenizer, dataset, reward_functions, args):
         logging_steps=args.grpo_logging_steps,
         save_steps=args.grpo_save_steps,
         output_dir=args.grpo_output_dir,
-        report_to="wandb",
+        report_to="wandb" if accelerator.is_main_process else None,
         save_total_limit=2,
+        
+        # Distributed training
+        ddp_find_unused_parameters=True,
+        dataloader_num_workers=2,
+        
+        # Memory optimization
+        gradient_checkpointing=args.gradient_checkpointing,
+        bf16=args.use_mixed_precision,
     )
     
-    # Prepare model for distributed training
-    model = accelerator.prepare(model)
-
     # Initialize trainer
     trainer = GRPOTrainer(
         model=model,
@@ -412,24 +478,32 @@ def train_grpo_model(model, tokenizer, dataset, reward_functions, args):
         reward_funcs=reward_functions,
         args=training_args,
         train_dataset=dataset,
+        accelerator=accelerator,
     )
 
     # Train
     trainer.train()
 
-    # Save final model
-    final_dir = os.path.join(args.grpo_output_dir, "final")
+    # Save final model (only from main process)
     if accelerator.is_main_process:
+        final_dir = os.path.join(args.grpo_output_dir, "final")
         accelerator.unwrap_model(model).save_pretrained(final_dir)
         tokenizer.save_pretrained(final_dir)
+        print(f"✅ Model saved to {final_dir}")
+    
     accelerator.wait_for_everyone()
     
-    print(f"✅ GRPO training complete! Model saved to {final_dir}")
-    return final_dir
+    return os.path.join(args.grpo_output_dir, "final")
 
 def main():
-    """Main training pipeline"""
+    """Main training pipeline with multi-GPU support"""
     parser = argparse.ArgumentParser(description="GRPO Training Pipeline for Logical Reasoning")
+    
+    # Multi-GPU settings
+    parser.add_argument("--num_gpus", type=int, default=None,
+                      help="Number of GPUs to use (default: all available)")
+    parser.add_argument("--use_fsdp", action="store_true",
+                      help="Use Fully Sharded Data Parallel (better for large models)")
     
     # Pipeline control
     parser.add_argument("--run_sft", action="store_true",
@@ -437,134 +511,196 @@ def main():
     parser.add_argument("--sft_model_path", type=str, default=None,
                       help="Path to pre-trained SFT model (skips SFT if provided)")
     
-    args = parser.parse_args()
+    # Dataset settings
+    parser.add_argument("--grpo_dataset", type=str, default="dataset/proverqa_simplified.json",
+                      help="Path to GRPO dataset")
+    parser.add_argument("--sft_dataset", type=str, default="dataset/sft/sft_with_reasoning.json",
+                      help="Path to SFT dataset")
+    parser.add_argument("--max_examples", type=int, default=None,
+                      help="Maximum number of examples to use")
     
-    # Set default parameters
-    grpo_dataset = "dataset/proverqa_simplified.json"
-    sft_dataset = "dataset/sft/sft_with_reasoning.json"
-    max_examples = None
-    max_seq_length = 3000
-    lora_rank = 32
+    # Model settings
+    parser.add_argument("--max_seq_length", type=int, default=3000,
+                      help="Maximum sequence length")
+    parser.add_argument("--lora_rank", type=int, default=32,
+                      help="LoRA rank")
     
     # SFT parameters
-    sft_epochs = 1
-    sft_steps = 100
-    sft_output_dir = "./sft_models"
+    parser.add_argument("--sft_epochs", type=int, default=1,
+                      help="Number of SFT epochs")
+    parser.add_argument("--sft_steps", type=int, default=100,
+                      help="Number of SFT steps")
+    parser.add_argument("--sft_output_dir", type=str, default="./sft_models",
+                      help="SFT output directory")
     
     # GRPO parameters
-    grpo_max_steps = 1250
-    grpo_batch_size = 4
-    grpo_gradient_accumulation_steps = 3
-    grpo_learning_rate = 5e-6
-    num_generations = 4
-    temperature = 1.0
-    grpo_logging_steps = 10
-    grpo_save_steps = 100
-    grpo_output_dir = "./grpo_models"
+    parser.add_argument("--grpo_max_steps", type=int, default=1250,
+                      help="Maximum GRPO training steps")
+    parser.add_argument("--grpo_batch_size", type=int, default=4,
+                      help="Per-device batch size for GRPO")
+    parser.add_argument("--grpo_gradient_accumulation_steps", type=int, default=3,
+                      help="Gradient accumulation steps")
+    parser.add_argument("--grpo_learning_rate", type=float, default=5e-6,
+                      help="GRPO learning rate")
+    parser.add_argument("--num_generations", type=int, default=4,
+                      help="Number of generations per prompt")
+    parser.add_argument("--temperature", type=float, default=1.0,
+                      help="Generation temperature")
+    parser.add_argument("--grpo_logging_steps", type=int, default=10,
+                      help="Logging steps")
+    parser.add_argument("--grpo_save_steps", type=int, default=100,
+                      help="Save steps")
+    parser.add_argument("--grpo_output_dir", type=str, default="./grpo_models",
+                      help="GRPO output directory")
+    
+    # Optimization settings
+    parser.add_argument("--gradient_checkpointing", action="store_true",
+                      help="Use gradient checkpointing to save memory")
+    parser.add_argument("--use_mixed_precision", action="store_true",
+                      help="Use mixed precision training (bf16)")
+    parser.add_argument("--use_8bit_optimizer", action="store_true",
+                      help="Use 8-bit optimizer to save memory")
+    
+    # Random seed
+    parser.add_argument("--seed", type=int, default=42,
+                      help="Random seed for reproducibility")
+    
+    args = parser.parse_args()
+    
+    # Set random seed
+    set_seed(args.seed)
     
     print("🧠 GRPO Training Pipeline for Logical Reasoning")
     print("=" * 60)
     
+    # Setup distributed training
+    local_rank, world_size, device = setup_distributed_training(args.num_gpus)
+    
+    print(f"🌐 Distributed Training Setup:")
+    print(f"  World Size: {world_size}")
+    print(f"  Local Rank: {local_rank}")
+    print(f"  Device: {device}")
+    print()
+    
     # Test Prover9 installation before starting
-    print("🔍 Testing Prover9 installation...")
-    if not test_prover9_installation():
-        print("❌ Prover9 not available - training cannot continue")
-        print("Please install Prover9 to use logical verification rewards")
-        return
-    print("✅ Prover9 ready")
+    if local_rank == 0:  # Only test from main process
+        print("🔍 Testing Prover9 installation...")
+        if not test_prover9_installation():
+            print("❌ Prover9 not available - training cannot continue")
+            print("Please install Prover9 to use logical verification rewards")
+            return
+        print("✅ Prover9 ready")
 
-    print("🔧 Initializing wandb...")
-    wandb.init(
-        project="logical-reasoning-grpo",
-        name=f"grpo-training",
-        config={
-            "grpo_max_steps": grpo_max_steps,
-            "grpo_batch_size": grpo_batch_size,
-            "grpo_learning_rate": grpo_learning_rate,
-            "num_generations": num_generations,
-            "temperature": temperature,
-            "max_seq_length": max_seq_length,
-            "lora_rank": lora_rank,
-        }
-    )
-    print("✅ Wandb initialized")
+    # Initialize wandb only on main process
+    if local_rank == 0:
+        print("🔧 Initializing wandb...")
+        wandb.init(
+            project="logical-reasoning-grpo",
+            name=f"grpo-training-{world_size}gpu",
+            config=vars(args)
+        )
+        print("✅ Wandb initialized")
     
     sft_model_path = args.sft_model_path
     
     # Run SFT training if requested and no pre-trained model provided
-    if args.run_sft and not sft_model_path:
+    if args.run_sft and not sft_model_path and local_rank == 0:
         print("🚀 Starting SFT pre-training phase...")
         
-        # Create SFT args
-        class SFTArgs:
-            def __init__(self):
-                self.dataset = sft_dataset
-                self.max_examples = max_examples
-                self.max_seq_length = max_seq_length
-                self.lora_rank = lora_rank
-                self.epochs = sft_epochs
-                self.max_steps = sft_steps
-                self.batch_size = 1
-                self.gradient_accumulation_steps = 1
-                self.learning_rate = 2e-4
-                self.warmup_steps = 10
-                self.logging_steps = 5
-                self.save_steps = 50
-                self.output_dir = sft_output_dir
+        # Create SFT args namespace
+        sft_args = argparse.Namespace(
+            dataset=args.sft_dataset,
+            max_examples=args.max_examples,
+            max_seq_length=args.max_seq_length,
+            lora_rank=args.lora_rank,
+            epochs=args.sft_epochs,
+            max_steps=args.sft_steps,
+            batch_size=1,
+            gradient_accumulation_steps=1,
+            learning_rate=2e-4,
+            warmup_steps=10,
+            logging_steps=5,
+            save_steps=50,
+            output_dir=args.sft_output_dir
+        )
         
-        sft_args = SFTArgs()
         sft_model_path = train_sft_main(sft_args)
         print(f"✅ SFT pre-training completed: {sft_model_path}")
     
-    # Load GRPO dataset
-    grpo_data = load_grpo_dataset(grpo_dataset, max_examples)
+    # Synchronize all processes
+    if world_size > 1:
+        torch.distributed.barrier()
     
-    # Setup model for GRPO
+    # Load GRPO dataset
+    if local_rank == 0:
+        grpo_data = load_grpo_dataset(args.grpo_dataset, args.max_examples)
+    else:
+        grpo_data = None
+    
+    # Setup model for GRPO (each process loads its own)
     model, tokenizer = setup_model_for_grpo(
-        sft_model_path, max_seq_length, lora_rank
+        sft_model_path, 
+        args.max_seq_length, 
+        args.lora_rank,
+        device=device if world_size > 1 else None
     )
     
     # Setup chat template
     tokenizer, system_prompt = setup_chat_template(tokenizer)
     
-    # Format GRPO dataset
-    print("📝 Formatting dataset for GRPO training...")
-    grpo_dataset = format_grpo_dataset(grpo_data, system_prompt, tokenizer)
-    print(f"📊 Formatted {len(grpo_dataset)} examples")
+    # Format GRPO dataset (only on main process, then broadcast)
+    if local_rank == 0:
+        print("📝 Formatting dataset for GRPO training...")
+        grpo_dataset = format_grpo_dataset(grpo_data, system_prompt, tokenizer)
+        print(f"📊 Formatted {len(grpo_dataset)} examples")
+    else:
+        grpo_dataset = None
+    
+    # For multi-GPU, the dataset will be automatically sharded by the trainer
+    if world_size > 1:
+        # Broadcast dataset info
+        if local_rank == 0:
+            dataset_size = len(grpo_dataset)
+        else:
+            dataset_size = None
+        
+        if world_size > 1:
+            dataset_size = torch.tensor([dataset_size if dataset_size else 0], device=device)
+            dist.broadcast(dataset_size, src=0)
+            dataset_size = dataset_size.item()
+        
+        # Each process needs the full dataset (trainer will shard it)
+        if local_rank != 0:
+            # Re-load and format dataset on other processes
+            grpo_data = load_grpo_dataset(args.grpo_dataset, args.max_examples)
+            grpo_dataset = format_grpo_dataset(grpo_data, system_prompt, tokenizer)
 
     # Setup reward functions with full pipeline
-    print("🎯 Setting up reward functions with full pipeline...")
-    accelerator = Accelerator()
-    reward_functions = setup_reward_functions(tokenizer, accelerator)
-    print(f"✅ Configured {len(reward_functions)} reward functions with NL→FOL and Prover9 verification")
+    print(f"🎯 [Rank {local_rank}] Setting up reward functions...")
     
-    # Create GRPO args object
-    class GRPOArgs:
-        def __init__(self):
-            self.grpo_max_steps = grpo_max_steps
-            self.grpo_batch_size = grpo_batch_size
-            self.grpo_gradient_accumulation_steps = grpo_gradient_accumulation_steps
-            self.grpo_learning_rate = grpo_learning_rate
-            self.num_generations = num_generations
-            self.temperature = temperature
-            self.grpo_logging_steps = grpo_logging_steps
-            self.grpo_save_steps = grpo_save_steps
-            self.grpo_output_dir = grpo_output_dir
-            self.max_seq_length = max_seq_length
-    
-    grpo_args = GRPOArgs()
+    # Create a temporary accelerator for reward setup
+    temp_accelerator = Accelerator()
+    reward_functions = setup_reward_functions(
+        tokenizer, 
+        temp_accelerator,
+        device=device if world_size > 1 else None
+    )
+    print(f"✅ [Rank {local_rank}] Configured reward functions")
     
     # Train GRPO model
-    final_model_path = train_grpo_model(model, tokenizer, grpo_dataset, reward_functions, grpo_args)
+    final_model_path = train_grpo_model_distributed(
+        model, tokenizer, grpo_dataset, reward_functions, args, device
+    )
     
-    print(f"\n🎉 Training pipeline completed successfully!")
-    print(f"📁 Final model saved to: {final_model_path}")
-    print(f"💡 To use this model, load it with:")
-    print("    from transformers import AutoModelForCausalLM, AutoTokenizer")
-    print(f"    model = AutoModelForCausalLM.from_pretrained('{final_model_path}')")
-    print(f"    tokenizer = AutoTokenizer.from_pretrained('{final_model_path}')")
-    
-    wandb.finish()
+    if local_rank == 0:
+        print(f"\n🎉 Training pipeline completed successfully!")
+        print(f"📁 Final model saved to: {final_model_path}")
+        print(f"💡 To use this model, load it with:")
+        print("    from transformers import AutoModelForCausalLM, AutoTokenizer")
+        print(f"    model = AutoModelForCausalLM.from_pretrained('{final_model_path}')")
+        print(f"    tokenizer = AutoTokenizer.from_pretrained('{final_model_path}')")
+        
+        wandb.finish()
 
     return final_model_path
 
