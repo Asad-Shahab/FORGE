@@ -13,9 +13,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from torch.utils.data import DataLoader
 
-# Import from existing setup modules - Fix the import path
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Import from existing setup modules
 from setup.setup_models import setup_qwen3
 
 def setup_chat_template(tokenizer):

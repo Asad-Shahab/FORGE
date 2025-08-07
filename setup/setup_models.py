@@ -6,7 +6,7 @@ Run: python setup_models.py
 """
 
 # IMPORTANT: Setup cache directories FIRST before importing ML libraries
-from setup_cache import setup_cache_directories
+from .setup_cache import setup_cache_directories
 print("🗂️  Configuring cache directories...")
 cache_dirs = setup_cache_directories()
 
@@ -45,9 +45,27 @@ def ensure_hf_auth():
         print("💡 Run: python quick_fix.py")
         return False
 
-if not ensure_hf_auth():
+# Only check auth on main process to avoid exit() in distributed training
+rank = int(os.environ.get('LOCAL_RANK', 0))
+if rank == 0 and not ensure_hf_auth():
     print("❌ Authentication required. Exiting.")
     exit(1)
+elif rank > 0:
+    # For non-main processes, just set token if available
+    token = os.environ.get("HUGGINGFACE_HUB_TOKEN") or os.environ.get("HF_TOKEN")
+    if not token:
+        # Check for token file
+        from pathlib import Path
+        home = Path.home()
+        token_file = home / ".cache" / "huggingface" / "token"
+        if token_file.exists():
+            try:
+                with open(token_file, 'r') as f:
+                    token = f.read().strip()
+                    os.environ["HUGGINGFACE_HUB_TOKEN"] = token
+                    os.environ["HF_TOKEN"] = token
+            except:
+                pass
 
 print()
 
@@ -177,12 +195,6 @@ def setup_llama_lora(device=None):
         token=token
     )
     
-    print("✅ Llama LoRA model loaded successfully!")
-    if device is not None:
-        print(f"📍 Model device: {device}")
-    else:
-        print(f"📍 Model device: {next(model_lora.parameters()).device}")
-    print(f"🔢 Base model parameters: {model_lora.base_model.num_parameters():,}")
     print()
     
     return model_lora, tokenizer_lora

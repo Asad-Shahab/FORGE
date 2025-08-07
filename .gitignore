@@ -3,5 +3,7 @@ __pycache__/
 cache/
 .claude/
 sft_models/
+sft_models_unsloth/
 grpo_models/
 grpo_trainer_lora_model/
+accelerate_config.yaml
