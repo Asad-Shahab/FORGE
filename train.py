@@ -642,15 +642,14 @@ def train_grpo_model_distributed(model, tokenizer, dataset, reward_functions, ar
         lr_scheduler_type="linear",
         optim="adamw_torch" if not args.use_8bit_optimizer else "adamw_8bit",
         
-        # Batch and steps - REDUCED for memory
-        per_device_train_batch_size=max(1, args.grpo_batch_size // 2),  # Reduce batch size
-        gradient_accumulation_steps=args.grpo_gradient_accumulation_steps * 2,  # Compensate with more accumulation
-        num_generations=2,  # Reduce from 4 to 2
+        per_device_train_batch_size=args.grpo_batch_size,
+        gradient_accumulation_steps=args.grpo_gradient_accumulation_steps,
+        num_generations=args.num_generations,
         max_steps=10 if args.test_mode else args.grpo_max_steps,  # Test mode: only 10 steps
         
         # Generation parameters - REDUCED lengths
-        max_prompt_length=min(800, max_prompt_length),  # Reduce prompt length
-        max_completion_length=min(400, max_completion_length),  # Reduce completion length
+        max_prompt_length=max_prompt_length, 
+        max_completion_length=max_completion_length,
         
         # Logging and saving
         logging_steps=args.grpo_logging_steps,
