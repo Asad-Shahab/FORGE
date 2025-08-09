@@ -43,19 +43,19 @@ CONFIG_3GPU = {
 # Configuration for 4 H100 GPUs
 CONFIG_4GPU = {
     "num_gpus": 4,
-    "grpo_batch_size": 4,  # Per GPU
-    "grpo_gradient_accumulation_steps": 1,  # Less accumulation with more GPUs
-    "grpo_learning_rate": 6e-6,  # Slightly higher LR with larger effective batch
-    "num_generations": 4,
-    "temperature": 1.0,
+    "grpo_batch_size": 2,  # Moderate batch size
+    "grpo_gradient_accumulation_steps": 2,
+    "grpo_learning_rate": 3e-6,
+    "num_generations": 8,  # Doubled generations for more signal
+    "temperature": 1.2,  # Slightly higher for diversity
     "max_seq_length": 3000,
-    "lora_rank": 64,  # Can use higher rank with more GPUs
+    "lora_rank": 64,
     "gradient_checkpointing": False,
     "use_mixed_precision": True,
     "use_8bit_optimizer": False,
-    "grpo_max_steps": 800,  # Reduced steps due to larger effective batch size
-    "grpo_logging_steps": 10,
-    "grpo_save_steps": 50,
+    "grpo_max_steps": 6000,  # ~10 epochs with 5000 examples
+    "grpo_logging_steps": 50,
+    "grpo_save_steps": 500,
 }
 
 # Memory-optimized configuration (if running into OOM)
