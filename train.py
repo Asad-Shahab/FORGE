@@ -453,14 +453,18 @@ def setup_model_for_grpo(model_path=None, max_seq_length=3000, lora_rank=32, dev
         # Check if this is a LoRA model by looking for adapter_config.json
         adapter_config_path = os.path.join(model_path, "adapter_config.json")
         if os.path.exists(adapter_config_path):
+            print(f"📦 Loading LoRA model from {model_path}")
             from peft import PeftModel, PeftConfig
             
             # Load the PEFT config to get base model name
+            print("   Loading PEFT config...")
             peft_config = PeftConfig.from_pretrained(model_path)
             base_model_name = peft_config.base_model_name_or_path
+            print(f"   Base model: {base_model_name}")
             
             
             # Load base model first
+            print(f"   Loading base model (this may take several minutes)...")
             if world_size > 1:
                 base_model = AutoModelForCausalLM.from_pretrained(
                     base_model_name,
@@ -476,9 +480,12 @@ def setup_model_for_grpo(model_path=None, max_seq_length=3000, lora_rank=32, dev
                     torch_dtype=torch.bfloat16,
                     device_map="auto",
                 )
+            print("   Base model loaded successfully")
             
             # Load LoRA adapters
+            print("   Loading LoRA adapters...")
             model = PeftModel.from_pretrained(base_model, model_path)
+            print("   LoRA adapters loaded successfully")
             
             # IMPORTANT: Set adapters to trainable mode for continued training
             model.train()

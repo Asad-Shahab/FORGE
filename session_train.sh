@@ -1,10 +1,7 @@
 #!/bin/bash
-#SBATCH -p h100
-#SBATCH --gres=gpu:4
-#SBATCH --mem=250gb
-#SBATCH -t 5-00:00:00
-#SBATCH -o h100_test_%j.log
-#SBATCH -e h100_test_%j.err
+
+
+module load cuda 
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export CUDA_VISIBLE_DEVICES=0,1,2,3
@@ -20,7 +17,6 @@ cd /scratch/ashahab4/no_unsloth/logical-reasoning-training
 # Set cache directories
 export HF_HOME=/scratch/ashahab4/no_unsloth/logical-reasoning-training/cache/huggingface
 
-module load cuda 
 
 # Load conda
 source /scratch/ashahab4/miniforge3/bin/activate

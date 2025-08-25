@@ -5,5 +5,10 @@ cache/
 sft_models/
 sft_models_unsloth/
 grpo_models/
+grpo_models_4gpu/
+grpo_models_4gpu_conservative/
 grpo_trainer_lora_model/
 accelerate_config.yaml
+*.log
+*.err
+training_out.txt
