@@ -58,5 +58,5 @@ conda activate logic
     --grpo_max_steps 8000 \
     --grpo_logging_steps 50 \
     --grpo_save_steps 500 \
-    --grpo_output_dir ./grpo_models_4gpu_conservative \
+    --grpo_output_dir ./grpo_models_4gpu_fixed \
 

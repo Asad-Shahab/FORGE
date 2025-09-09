@@ -384,10 +384,10 @@ def setup_complex_reward_functions(tokenizer, accelerator_placeholder, device=No
                 try:
                     with torch.no_grad():
                         fol_statements = convert_reasoning_to_fol(
-                            reasoning_statements[:3], llama_model, llama_tokenizer  # Limit to 3 statements
+                            reasoning_statements, llama_model, llama_tokenizer  # Convert all statements
                         )
                 except Exception as fol_error:
-                    fol_statements = [(stmt, "Error in FOL conversion") for stmt in reasoning_statements[:3]]
+                    fol_statements = [(stmt, "Error in FOL conversion") for stmt in reasoning_statements]
                 
                 # Verify with Prover9
                 try:

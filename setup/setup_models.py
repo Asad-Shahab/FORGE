@@ -19,18 +19,27 @@ import torch.distributed as dist
 
 def ensure_hf_auth():
     """Ensure HF authentication is working"""
-    # Check for token in default location
-    home = Path.home()
-    token_file = home / ".cache" / "huggingface" / "token"
-    
     token = None
-    if token_file.exists():
-        try:
-            with open(token_file, 'r') as f:
-                token = f.read().strip()
-        except:
-            pass
     
+    # Check multiple possible token locations
+    token_locations = [
+        Path.home() / ".cache" / "huggingface" / "token",  # Default location
+        Path("/cache/huggingface/token"),  # Current directory cache
+        Path.cwd() / "cache" / "huggingface" / "token",   # Relative cache
+    ]
+    
+    for token_file in token_locations:
+        if token_file.exists():
+            try:
+                with open(token_file, 'r') as f:
+                    token = f.read().strip()
+                    if token:  # Found valid token
+                        print(f"✅ Found HF token in {token_file}")
+                        break
+            except:
+                pass
+    
+    # Check environment variables if no file token found
     if not token:
         token = os.environ.get("HUGGINGFACE_HUB_TOKEN") or os.environ.get("HF_TOKEN")
     
