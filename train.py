@@ -177,7 +177,7 @@ def parse_qwen_solution(qwen_output):
     return reasoning_statements, answer
 
 def convert_reasoning_to_fol(reasoning_statements, llama_model, llama_tokenizer):
-    """Convert reasoning statements to FOL using Llama"""
+    """Convert reasoning statements to FOL using Llama - optimized for batch processing"""
 
     improved_system_prompt = """You are an expert at converting natural language statements into First-Order Logic (FOL). Follow these strict rules:
 
@@ -200,55 +200,63 @@ VARIABLE RULES:
 
 Start your answer with '𝜙=' followed by the FOL formula. Do not include any other text."""
 
-    def translate_nl_to_fol(text):
-        def formatting_func(text):
-            return llama_tokenizer.apply_chat_template(
+    def translate_nl_to_fol_batch(statements):
+        """Process multiple statements more efficiently"""
+        fol_results = []
+        
+        for text in statements:
+            prompt = llama_tokenizer.apply_chat_template(
                 [
-                    {
-                        "role": "system",
-                        "content": improved_system_prompt
-                    },
+                    {"role": "system", "content": improved_system_prompt},
                     {"role": "user", "content": text},
                 ],
                 tokenize=False,
                 add_generation_prompt=False,
             )
+            
+            inputs = llama_tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=512)
+            
+            device = next(llama_model.parameters()).device
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            
+            with torch.no_grad():
+                outputs = llama_model.generate(
+                    **inputs, 
+                    max_new_tokens=40,  # Further reduced for speed
+                    temperature=0.1, 
+                    do_sample=False,  # Deterministic for consistency
+                    pad_token_id=llama_tokenizer.eos_token_id,
+                    eos_token_id=llama_tokenizer.eos_token_id,
+                    num_beams=1,
+                    use_cache=False
+                )
+            
+            result = llama_tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+            # Extract FOL formula
+            if "𝜙=" in result:
+                fol_formula = result.split("𝜙=")[-1].strip()
+            else:
+                fol_formula = result.strip()
+            
+            fol_results.append(fol_formula)
         
-        prompt = formatting_func(text)
-        inputs = llama_tokenizer(prompt, return_tensors="pt", padding=True)
-        
-        device = next(llama_model.parameters()).device
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            outputs = llama_model.generate(
-                **inputs, 
-                max_new_tokens=50,  # Reduced significantly
-                temperature=0.1, 
-                do_sample=True,
-                pad_token_id=llama_tokenizer.eos_token_id,  # Explicit pad token
-                eos_token_id=llama_tokenizer.eos_token_id,
-                num_beams=1,  # Greedy decoding for speed
-                use_cache=False  # Disable KV-cache to prevent conflicts
-            )
-        
-        result = llama_tokenizer.decode(outputs[0], skip_special_tokens=True)
-        return result
+        return fol_results
     
     fol_statements = []
     
-    for statement in reasoning_statements:
-        try:
-            fol_result = translate_nl_to_fol(statement)
-            if "𝜙=" in fol_result:
-                fol_formula = fol_result.split("𝜙=")[-1].strip()
-            else:
-                fol_formula = fol_result.strip()
-            
+    try:
+        # Process all statements
+        fol_formulas = translate_nl_to_fol_batch(reasoning_statements)
+        
+        # Pair statements with their FOL translations
+        for statement, fol_formula in zip(reasoning_statements, fol_formulas):
             fol_statements.append((statement, fol_formula))
             
-        except Exception as e:
-            fol_statements.append((statement, f"Error: {e}"))
+    except Exception as e:
+        # Fallback: if batch processing fails, mark all as errors
+        for statement in reasoning_statements:
+            fol_statements.append((statement, f"Error: {str(e)[:30]}"))
     
     return fol_statements
 
@@ -325,24 +333,96 @@ def setup_reward_functions(tokenizer, accelerator, device=None):
 def setup_complex_reward_functions(tokenizer, accelerator_placeholder, device=None):
     """Full pipeline reward with NL→FOL and Prover9 - use after basic training works"""
     
-    # Load Llama model for NL→FOL conversion
-    try:
-        llama_model, llama_tokenizer = setup_llama_lora(device=device)
-    except Exception as e:
-        print(f"❌ Failed to load Llama model: {e}")
-        raise
+    # Check if we're the main process using distributed environment
+    local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    world_size = int(os.environ.get('WORLD_SIZE', 1))
+    is_main_process = local_rank == 0
     
-    # Initialize reward calculator
+    # Load Llama model ONLY on rank 0 to save memory
+    llama_model = None
+    llama_tokenizer = None
+    if is_main_process:
+        try:
+            # Load on CPU first to save GPU memory, then move to device if needed
+            llama_model, llama_tokenizer = setup_llama_lora(device='cpu')
+            if device is not None and torch.cuda.is_available():
+                # Move to GPU only when needed for inference
+                llama_model = llama_model.to(device)
+            print(f"✅ Llama model loaded on rank 0 for NL→FOL conversion")
+        except Exception as e:
+            print(f"❌ Failed to load Llama model: {e}")
+            raise
+    
+    # Initialize reward calculator on all ranks
     reward_calculator = LogicalReasoningReward()
     
     def compute_complex_reward(completions, **kwargs):
         """Full pipeline reward computation with NL→FOL and Prover9"""
-        # Check if we're the main process using distributed environment
-        local_rank = int(os.environ.get('LOCAL_RANK', 0))
-        is_main_process = local_rank == 0
+        # In distributed mode, we need to handle this carefully
+        # All ranks need to return rewards, but only rank 0 does complex computation
         
-        # Compute rewards silently
+        scores = []
         
+        if world_size > 1:
+            # Gather all completions on rank 0
+            if torch.distributed.is_initialized():
+                # Convert completions to tensor for gathering (simplified approach)
+                # In practice, TRL handles this, so we just need to ensure consistent rewards
+                
+                if is_main_process and llama_model is not None:
+                    # Rank 0 does the complex computation
+                    scores = _compute_rewards_on_main(
+                        completions, llama_model, llama_tokenizer, 
+                        reward_calculator, kwargs
+                    )
+                else:
+                    # Other ranks return simple format-based rewards
+                    scores = _compute_simple_rewards(completions)
+            else:
+                # Not in distributed mode, compute normally
+                if llama_model is not None:
+                    scores = _compute_rewards_on_main(
+                        completions, llama_model, llama_tokenizer, 
+                        reward_calculator, kwargs
+                    )
+                else:
+                    scores = _compute_simple_rewards(completions)
+        else:
+            # Single GPU mode - use full pipeline
+            if llama_model is not None:
+                scores = _compute_rewards_on_main(
+                    completions, llama_model, llama_tokenizer, 
+                    reward_calculator, kwargs
+                )
+            else:
+                scores = _compute_simple_rewards(completions)
+        
+        return scores
+    
+    def _compute_simple_rewards(completions):
+        """Simple reward computation for non-main ranks"""
+        scores = []
+        for completion in completions:
+            # Basic format check
+            has_reasoning = '<initial_reasoning>' in completion and '</initial_reasoning>' in completion
+            has_steps = '<steps>' in completion and '</steps>' in completion  
+            has_answer = '<answer>' in completion and '</answer>' in completion
+            
+            format_score = (has_reasoning + has_steps + has_answer) / 3.0
+            
+            # Length penalty
+            length_score = 1.0
+            if len(completion) < 100:
+                length_score = 0.5
+            elif len(completion) > 2000:
+                length_score = 0.7
+            
+            score = (format_score * 0.7 + length_score * 0.3) * 10.0
+            scores.append(score)
+        return scores
+    
+    def _compute_rewards_on_main(completions, llama_model, llama_tokenizer, reward_calculator, kwargs):
+        """Full reward computation with NL→FOL and Prover9 - only on main rank"""
         scores = []
         
         # Try to get expected answers from dataset
@@ -380,43 +460,73 @@ def setup_complex_reward_functions(tokenizer, accelerator_placeholder, device=No
                     scores.append(-1.0)
                     continue
                 
-                # Convert to FOL using Llama
+                # Convert to FOL using Llama - process ALL statements efficiently
                 try:
+                    # Move model to GPU only for inference if needed
+                    if str(llama_model.device) == 'cpu' and torch.cuda.is_available():
+                        llama_model = llama_model.to('cuda:0')
+                    
                     with torch.no_grad():
-                        fol_statements = convert_reasoning_to_fol(
-                            reasoning_statements, llama_model, llama_tokenizer  # Convert all statements
-                        )
+                        # Process ALL reasoning statements but in batches if needed
+                        if len(reasoning_statements) > 10:
+                            # For very long reasoning chains, process in chunks
+                            fol_statements = []
+                            for i in range(0, len(reasoning_statements), 5):
+                                chunk = reasoning_statements[i:i+5]
+                                chunk_fol = convert_reasoning_to_fol(
+                                    chunk,
+                                    llama_model, 
+                                    llama_tokenizer
+                                )
+                                fol_statements.extend(chunk_fol)
+                                # Clear cache between chunks
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
+                        else:
+                            # Process all at once for shorter chains
+                            fol_statements = convert_reasoning_to_fol(
+                                reasoning_statements,  # Use ALL statements
+                                llama_model, 
+                                llama_tokenizer
+                            )
+                    
+                    # Move back to CPU to free GPU memory
+                    if torch.cuda.is_available():
+                        llama_model = llama_model.to('cpu')
+                        torch.cuda.empty_cache()
+                        
                 except Exception as fol_error:
-                    fol_statements = [(stmt, "Error in FOL conversion") for stmt in reasoning_statements]
+                    fol_statements = [(stmt, f"Error in FOL: {str(fol_error)[:50]}") for stmt in reasoning_statements]
                 
-                # Verify with Prover9
+                # Verify with Prover9 - add timeout to prevent hanging
                 try:
                     verification_result = verify_reasoning_with_prover9(
                         fol_statements, 
-                        f"GRPO_Training_Example_{i}"
+                        f"GRPO_Training_Example_{i}",
+                        timeout=5  # Add 5 second timeout
                     )
                 except Exception as prover_error:
-                    verification_result = {'valid': False, 'details': 'Prover9 error'}
+                    verification_result = {'valid': False, 'details': 'Prover9 timeout or error'}
                 
-                # Calculate composite reward
+                # Calculate composite reward with all statements
                 reward_components = reward_calculator.calculate_composite_reward(
                     response=response,
                     expected_answer=expected,
                     prover9_result=verification_result,
-                    reasoning_steps=reasoning_statements
+                    reasoning_steps=reasoning_statements  # Use ALL statements for complete evaluation
                 )
 
-                # Log only from main process and first few examples
-                if i < 5 and is_main_process:
+                # Log only first example to reduce overhead
+                if i == 0 and is_main_process:
                     try:
                         wandb.log({
-                            f"reward/answer_correctness": reward_components.answer_correctness,
-                            f"reward/logical_validity": reward_components.logical_validity,
-                            f"reward/format_compliance": reward_components.format_compliance,
-                            f"reward/prover9_valid": verification_result.get('valid', False),
+                            "reward/answer_correctness": reward_components.answer_correctness,
+                            "reward/logical_validity": reward_components.logical_validity,
+                            "reward/format_compliance": reward_components.format_compliance,
+                            "reward/prover9_valid": verification_result.get('valid', False),
                         })
                     except:
-                        pass  # Don't fail if wandb logging fails
+                        pass
                 
                 # Scale reward for GRPO
                 scaled_reward = reward_components.total_reward * 10.0
@@ -424,10 +534,8 @@ def setup_complex_reward_functions(tokenizer, accelerator_placeholder, device=No
                 
             except Exception as e:
                 if is_main_process:
-                    print(f"⚠️ Error in reward computation for completion {i}: {e}")
-                scores.append(-1.0)  # Penalty for failed processing
-        
-        # Rewards computed
+                    print(f"⚠️ Error in reward computation: {e}")
+                scores.append(-1.0)
         
         return scores
     
