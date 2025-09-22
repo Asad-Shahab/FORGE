@@ -51,7 +51,7 @@ if not ensure_hf_auth():
 print()
 
 import torch
-from unsloth import FastLanguageModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from tqdm import tqdm
 import sys
 
@@ -68,14 +68,28 @@ def check_gpu():
     print()
 
 def setup_qwen3():
-    """Setup Qwen3-32B with Unsloth"""
-    print("🦥 Setting up Qwen3-32B with Unsloth...")
-    
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name="unsloth/Qwen3-32B-unsloth-bnb-4bit",
-        max_seq_length=2048,
-        dtype=None,  # Auto-detect
-        load_in_4bit=True,
+    """Setup Qwen3-32B using transformers"""
+    print("🚀 Setting up Qwen3-32B...")
+
+    model_name = "Qwen/Qwen3-32B"
+
+    bnb_config = None
+    try:
+        from transformers import BitsAndBytesConfig
+        bnb_config = BitsAndBytesConfig(load_in_4bit=True)
+    except Exception:
+        pass
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        device_map="auto",
+        trust_remote_code=True,
+        quantization_config=bnb_config,
+        torch_dtype=torch.bfloat16,
     )
     
     print("✅ Qwen3-32B loaded successfully!")
@@ -145,8 +159,6 @@ Provide only the detailed initial reasoning followed by [END]:"""
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
             repetition_penalty=1.1,
-            stop_strings=["[END]"],
-            tokenizer=tokenizer
         )
     
     # Decode only the new tokens (generated part)

@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Fixed Qwen generation that handles xformers compatibility issues
+Fixed Qwen generation that handles earlier compatibility issues
 """
 
 import torch
 from setup_models import setup_qwen3, setup_llama_lora
 
 def generate_qwen_text_fixed(model, tokenizer, prompt, max_new_tokens=200):
-    """Fixed Qwen text generation that avoids xformers issues"""
+    """Fixed Qwen text generation that avoids attention issues"""
     
     # Try to disable flash attention if causing issues
     try:
-        # Method 1: Use model.generate with specific parameters to avoid xformers
+        # Method 1: Use model.generate with specific parameters for stability
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1500)
         device = next(model.parameters()).device
         inputs = {k: v.to(device) for k, v in inputs.items()}
@@ -72,22 +72,22 @@ def generate_text_fallback(model, tokenizer, prompt, max_new_tokens=200):
     return generated_text
 
 def install_xformers_fix():
-    """Try to fix xformers installation"""
+    """Attempt to fix optional dependency installation"""
     import subprocess
     import sys
     
-    print("🔧 Attempting to fix xformers installation...")
+    print("🔧 Attempting to fix optional dependency installation...")
     
     try:
-        # Try to install/upgrade xformers
+        # Try to install/upgrade package
         subprocess.check_call([
             sys.executable, "-m", "pip", "install", 
             "xformers", "--upgrade", "--no-deps"
         ])
-        print("✅ xformers installation attempted")
+        print("✅ Installation attempted")
         return True
     except Exception as e:
-        print(f"❌ xformers installation failed: {e}")
+        print(f"❌ Installation failed: {e}")
         return False
 
 def test_qwen_generation():
@@ -219,13 +219,13 @@ def main():
     
     if not qwen_works:
         print("\n⚠️  Qwen generation has issues. Using manual problem instead.")
-        print("This is common with xformers compatibility on some systems.")
-        
-        # Ask user if they want to try fixing xformers
-        fix_choice = input("\nTry to fix xformers installation? (y/N): ").strip().lower()
+        print("This can happen due to optional dependency issues on some systems.")
+
+        # Ask user if they want to attempt a dependency fix
+        fix_choice = input("\nAttempt installation fix? (y/N): ").strip().lower()
         if fix_choice == 'y':
             install_xformers_fix()
-            print("🔄 Restart Python and try again after xformers fix.")
+            print("🔄 Restart Python and try again after the fix.")
             return
         
         # Use manual problem

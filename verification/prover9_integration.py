@@ -196,7 +196,7 @@ def parse_prover9_output(output):
     
     return proof_found, proof_info
 
-def verify_reasoning_with_prover9(fol_statements, problem_name="Logic Problem"):
+def verify_reasoning_with_prover9(fol_statements, problem_name="Logic Problem", timeout=10):
     """Main function to verify reasoning using Prover9"""
     
     # print(f"🔍 Verifying '{problem_name}' with Prover9")
@@ -217,8 +217,8 @@ def verify_reasoning_with_prover9(fol_statements, problem_name="Logic Problem"):
     # Create Prover9 input
     prover9_input = create_prover9_input(premises, conclusion, problem_name)
     
-    # Run Prover9 (silently)
-    result = run_prover9(prover9_input)
+    # Run Prover9 (silently) with timeout
+    result = run_prover9(prover9_input, timeout=timeout)
     
     # Parse output to get final status
     if result['stdout']:

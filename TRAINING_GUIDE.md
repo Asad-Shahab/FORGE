@@ -102,6 +102,15 @@ python train.py \
     --grpo_max_steps 1000
 ```
 
+### 5. Launch Training with Accelerate
+
+For multi-GPU setups, configure and run training via [Hugging Face Accelerate](https://github.com/huggingface/accelerate):
+
+```bash
+accelerate config    # run once to set up your environment
+accelerate launch train.py --grpo_max_steps 1000
+```
+
 ## Configuration Options
 
 ### SFT Training (`train_sft.py`)
@@ -195,13 +204,14 @@ Both scripts use `setup_qwen3()` from `setup/setup_models.py` for consistent mod
 After training, load models with:
 
 ```python
-from unsloth import FastLanguageModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Load the final model
-model, tokenizer = FastLanguageModel.from_pretrained(
-    "./grpo_models/final",  # or "./sft_models/final"
-    max_seq_length=2048,
-    dtype=None,
+model = AutoModelForCausalLM.from_pretrained(
+    "./grpo_models/final"  # or "./sft_models/final"
+)
+tokenizer = AutoTokenizer.from_pretrained(
+    "./grpo_models/final"  # or "./sft_models/final"
 )
 
 # Use for inference
