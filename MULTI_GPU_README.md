@@ -19,6 +19,10 @@ tar xzf LADR-2009-11A.tar.gz
 cd LADR-2009-11A
 make all
 sudo make install
+
+# or use brew
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+brew install prover9
 ```
 
 3. Set up Hugging Face authentication:
