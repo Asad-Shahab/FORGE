@@ -25,7 +25,7 @@ conda activate logic
 pip install vllm
 
 # Install remaining packages
-pip install accelerate transformers
+pip install accelerate transformers wandb datasets
 
 # Configure Accelerate (for multi-GPU training)
 accelerate config
