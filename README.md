@@ -1,221 +1,303 @@
-# Logical Reasoning Pipeline with Reinforcement Learning
+# FORGE: FOL-Optimized Reasoning with GRPO Enhancement
 
-A comprehensive pipeline for training and evaluating logical reasoning capabilities in Large Language Models using First-Order Logic verification and reinforcement learning techniques.
+A training pipeline for reducing reasoning hallucinations in Large Language Models using First-Order Logic (FOL) verification and reinforcement learning (GRPO).
 
-## 🚀 Setup
+## Research Overview
 
-### Prerequisites
+LLMs can generate plausible but logically invalid reasoning chains, inserting unsupported steps ("hallucinations"). This project implements a two-stage training approach to address this:
 
-- **Python 3.8+**
-- **CUDA-compatible GPU** (recommended: 16GB+ VRAM)
-- **Conda or virtual environment**
-- **Git**
+1. **SFT (Supervised Fine-Tuning)**: Train the model to produce structured proofs
+2. **GRPO (Group Relative Policy Optimization)**: Reward-guided training using formal verification
 
-### 1. Environment Setup
+### Key Observation
+
+> **Right answers are common; correct reasoning is not.**
+>
+> Across our experiments, models selected the correct answer ~75% of the time, but only ~40% of generated proofs were logically valid (free of hallucinated steps).
+
+### Preliminary Results (Work in Progress)
+
+- **SFT Stage**: Model successfully learned to produce structured proofs in the required format
+- **GRPO Stage**: Showed small improvements (~4%) in reasoning quality on validation sets
+- Results are preliminary due to compute constraints
+
+### Known Challenges
+
+1. **NL-to-FOL Conversion**: Translation errors cause false negatives in Prover9 checking
+2. **Prover9 Timeouts**: Proofs with more than 20 steps often timeout
+3. **Generation Speed**: Long reasoning chains (3000 tokens) slow down GRPO training
+
+### Future Directions
+
+- **Chunked Verification**: Break long proofs into smaller sub-proofs
+- **Alternative Provers**: Explore Z3, Lean for faster/more scalable verification
+- **Cross-Domain Transfer**: Test if logical proof training improves math and general QA
+
+### Models Used
+
+| Component | Model | Purpose |
+|-----------|-------|---------|
+| Base Model | [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B) | Reasoning and proof generation |
+| NL-to-FOL | [Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct) + [LoRA adapter](https://huggingface.co/fvossel/Llama-3.1-8B-Instruct-nl-to-fol) | Convert natural language to First-Order Logic |
+| Prover | [Prover9](https://www.cs.unm.edu/~mccune/prover9/) | Formal verification of logical validity |
+
+---
+
+## Installation
+
+### 1. Prover9 Setup
+
+Prover9 is required for logical verification. Install it first:
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install prover9
+```
+
+**macOS:**
+```bash
+brew install prover9
+```
+
+**Build from source:**
+```bash
+wget https://www.cs.unm.edu/~mccune/prover9/download/LADR-2009-11A.tar.gz
+tar xzf LADR-2009-11A.tar.gz
+cd LADR-2009-11A
+make all
+sudo make install
+```
+
+Verify installation:
+```bash
+which prover9
+```
+
+### 2. Environment Setup
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd logical-reasoning-pipeline
+git clone https://github.com/Asad-Shahab/FORGE.git
+cd FORGE
 
 conda create --name logic python=3.11 -y
 conda activate logic
 
-# Install vLLM first (this will install PyTorch with proper NCCL setup)
-pip install vllm
-
-# Install remaining packages
-pip install accelerate transformers wandb datasets
-
-# Configure Accelerate (for multi-GPU training)
-accelerate config
-
-# Test everything
-python -c "
-import torch
-import accelerate
-print('PyTorch version:', torch.__version__)
-print('CUDA available:', torch.cuda.is_available())
-print('CUDA version:', torch.version.cuda)
-print('GPU count:', torch.cuda.device_count())
-if torch.cuda.is_available():
-    print('GPU name:', torch.cuda.get_device_name(0))
-print('Accelerate version:', accelerate.__version__)
-print('vLLM import test...', end=' ')
-import vllm
-print('✓')
-"
+pip install -r requirements.txt
 ```
 
-### 2. HuggingFace Authentication
+### 3. HuggingFace Authentication
 
 ```bash
-# Login to HuggingFace (required for model access)
-pip install -U "huggingface_hub[cli]"
 huggingface-cli login
-# Enter your HuggingFace token when prompted
-```
-
-### 3. Cache Configuration *(Optional - for university/cluster environments)*
-
-If you're running on a university cluster or environment with restricted permissions:
-
-```bash
-# Setup local cache directories (optional)
-python -c "from setup.cache_manager import setup_cache_directories; setup_cache_directories()"
-```
-
-For manual cache setup:
-```bash
-export HF_HOME="./cache/huggingface"
-export TRANSFORMERS_CACHE="./cache/transformers" 
-mkdir -p ./cache/huggingface ./cache/transformers
 ```
 
 ### 4. Verify Installation
 
-Test each component to ensure proper setup:
-
-#### Test Prover9 Installation
 ```bash
-python -c "from verification.prover9_integration import test_prover9_installation; print('✅ Prover9 OK' if test_prover9_installation() else '❌ Prover9 FAILED')"
+# Test Prover9
+python -c "from verification.prover9_integration import test_prover9_installation; print('Prover9 OK' if test_prover9_installation() else 'Prover9 FAILED')"
+
+# Test model loading
+python -c "from setup.setup_models import setup_qwen3; m, t = setup_qwen3(); print('Models OK')"
 ```
 
-#### Test Model Loading
-```bash
-python -c "
-from setup.setup_models import setup_qwen3, setup_llama_lora
-print('Testing model loading...')
-try:
-    qwen_model, qwen_tokenizer = setup_qwen3()
-    print('✅ Qwen3-8B loaded successfully')
-    llama_model, llama_tokenizer = setup_llama_lora() 
-    print('✅ Llama NL-to-FOL loaded successfully')
-    print('🎉 All models ready!')
-except Exception as e:
-    print(f'❌ Model loading failed: {e}')
-"
-```
+### 5. Cache Configuration (Optional)
 
-#### Test Reward System
-```bash
-python -c "
-from reward.reward import LogicalReasoningReward
-reward_calc = LogicalReasoningReward()
-print('✅ Reward system loaded successfully')
-print(f'Weights: {reward_calc.weights}')
-"
-```
-
-### 5. Run the Pipeline
+For cluster environments with restricted permissions:
 
 ```bash
-# Execute the complete logical reasoning pipeline
-python pipeline_with_rewards.py
+export HF_HOME="./cache/huggingface"
+export TRANSFORMERS_CACHE="./cache/transformers"
+mkdir -p ./cache/huggingface ./cache/transformers
 ```
-
-### 6. Train with Accelerate
-
-```bash
-accelerate config      # set number of GPUs (e.g. 4 H100s)
-accelerate launch train.py [args]
-```
-
-### Expected Directory Structure
-
-After successful setup, your directory should look like:
-
-```
-logical-reasoning-training/
-├── pipeline_with_rewards.py          # Main pipeline
-├── pipeline_dev.py                   # Pipeline on dev dataset
-├── train.py                          # Main GRPO Training file
-├── dataset/
-│   ├── dev/
-│   ├── sft/
-│   ├── __init__.py
-│   ├── dev_split.py
-│   ├── proverqa_simplified.json      # Processed dataset
-│   └── proverqa_processor.py         # Dataset processing
-├── reward/
-│   ├── __init__.py
-│   └── reward.py                     # Reward calculation
-├── setup/
-│   ├── __init__.py
-│   ├── setup_models.py               # Model loading
-│   └── cache_manager.py              # Cache management (optional)
-├── verification/
-│   ├── __init__.py
-│   └── prover9_integration.py        # FOL verification
-└── cache/                            # Local cache (optional)
-    ├── huggingface/
-    └── transformers/
-```
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-**HuggingFace Authentication Error:**
-- Ensure you have a valid HuggingFace account and token
-- Verify token has access to required models (Qwen, Llama)
-
-**CUDA/GPU Issues:**
-- Check GPU availability: `nvidia-smi`
-- Ensure CUDA version compatibility with PyTorch
-- For CPU-only usage, modify model loading parameters
-
-**Prover9 Installation Issues:**
-- **Linux:** `sudo apt-get install prover9`
-- **macOS:** `brew install prover9`  
-- **Windows:** Use WSL or Docker
-- Verify installation: `which prover9`
-
-**Memory Issues:**
-- Reduce batch sizes in model configuration
-- Use gradient checkpointing for large models
-- Consider using smaller model variants
-
-**Dataset Download Issues:**
-- Check internet connection
-- Verify HuggingFace credentials
-- Manually download dataset if automated process fails
-
-### System Requirements
-
-- **Minimum:** 8GB RAM, 4GB GPU VRAM
-- **Recommended:** 32GB RAM, 16GB+ GPU VRAM  
-- **Storage:** 50GB+ free space for models and cache
-
-### University/Cluster Environments *(Optional)*
-
-If running on university clusters or restricted environments:
-
-1. **Use local cache** (Step 4) to avoid permission issues
-2. **Request GPU access** for model training/inference
-3. **Check quota limits** for storage and compute
-4. **Use job scheduling** systems (SLURM, PBS) if required
-
-## 📋 Verification Checklist
-
-Before proceeding, ensure:
-
-- [ ] All dependencies installed successfully
-- [ ] HuggingFace authentication configured
-- [ ] Prover9 returns "OK" in verification test
-- [ ] Models load without errors
-- [ ] Dataset file `proverqa_simplified.json` created
-- [ ] Main pipeline runs and displays LLM output + reward breakdown
-
-## 🎯 Next Steps
-
-Once setup is complete, you can:
-
-1. **Explore the pipeline** with different logical reasoning problems
-2. **Analyze reward components** and model performance
-3. **Generate training data** for reinforcement learning
-4. **Implement GRPO training** for model improvement
 
 ---
 
-*For detailed usage instructions, training procedures, and advanced configuration, see the additional sections below.*
+## Training
+
+### Quick Start
+
+```bash
+# Step 1: SFT pre-training
+python train_sft.py --epochs 3 --output_dir ./sft_models
+
+# Step 2: GRPO training
+./launch_training.sh 2 --sft_model_path ./sft_models/final
+```
+
+### SFT Training Options
+
+```bash
+python train_sft.py \
+    --dataset dataset/sft/sft_with_reasoning.json \
+    --max_examples 200 \
+    --epochs 3 \
+    --batch_size 2 \
+    --learning_rate 2e-4 \
+    --output_dir ./sft_models
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--dataset` | `dataset/sft/sft_with_reasoning.json` | SFT training dataset |
+| `--max_examples` | `None` | Limit number of training examples |
+| `--epochs` | `3` | Number of training epochs |
+| `--batch_size` | `1` | Per device batch size |
+| `--learning_rate` | `2e-4` | Learning rate |
+| `--output_dir` | `./sft_models` | Output directory |
+
+### GRPO Training Options
+
+```bash
+python train.py \
+    --sft_model_path ./sft_models/final \
+    --grpo_dataset dataset/proverqa_simplified.json \
+    --grpo_max_steps 500 \
+    --grpo_batch_size 2 \
+    --num_generations 4 \
+    --grpo_learning_rate 5e-6 \
+    --grpo_output_dir ./grpo_models
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--sft_model_path` | `None` | Path to pre-trained SFT model |
+| `--grpo_max_steps` | `1000` | GRPO training steps |
+| `--grpo_batch_size` | `1` | Per-GPU batch size |
+| `--num_generations` | `4` | Generations per prompt |
+| `--temperature` | `1.0` | Sampling temperature |
+| `--grpo_learning_rate` | `5e-6` | GRPO learning rate |
+
+---
+
+## Multi-GPU Training
+
+### Using the Launch Script
+
+```bash
+chmod +x launch_training.sh
+
+./launch_training.sh 2                              # 2 GPUs
+./launch_training.sh 4 --gradient_checkpointing     # 4 GPUs with memory optimization
+./launch_training.sh 2 --run_sft                    # With SFT pre-training
+```
+
+### Direct Commands
+
+```bash
+# 2 GPUs
+torchrun --standalone --nproc_per_node=2 train.py \
+    --num_gpus 2 \
+    --grpo_batch_size 4 \
+    --use_mixed_precision
+
+# 4 GPUs
+torchrun --standalone --nproc_per_node=4 train.py \
+    --num_gpus 4 \
+    --grpo_batch_size 4 \
+    --grpo_gradient_accumulation_steps 1 \
+    --use_mixed_precision
+```
+
+### Memory Optimization
+
+If you encounter OOM errors:
+
+```bash
+./launch_training.sh 2 \
+    --grpo_batch_size 2 \
+    --grpo_gradient_accumulation_steps 4 \
+    --max_seq_length 2048 \
+    --lora_rank 16 \
+    --gradient_checkpointing \
+    --use_8bit_optimizer
+```
+
+---
+
+## Reward Function
+
+The GRPO training uses three reward components:
+
+| Component | Weight | Description |
+|-----------|--------|-------------|
+| Format Compliance | 10% | Checks for proper XML tag structure |
+| Answer Correctness | 35% | Verifies correct A/B/C answer |
+| Logical Validity | 55% | Prover9 verification of reasoning |
+
+### Expected Output Format
+
+```
+<initial_reasoning>
+Your initial analysis here...
+</initial_reasoning>
+
+<steps>
+Step 1: Logical reasoning step
+Step 2: Another reasoning step
+...
+</steps>
+
+<answer>
+A
+</answer>
+```
+
+---
+
+## Loading Trained Models
+
+```python
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model = AutoModelForCausalLM.from_pretrained("./grpo_models/final")
+tokenizer = AutoTokenizer.from_pretrained("./grpo_models/final")
+
+model = model.to("cuda")
+```
+
+---
+
+## Troubleshooting
+
+**NCCL error:**
+```bash
+nvidia-smi                    # Check GPU visibility
+export NCCL_DEBUG=INFO        # Enable debug logging
+```
+
+**Prover9 not found:**
+```bash
+which prover9                 # Should show the path
+```
+
+**CUDA out of memory:**
+- Reduce `--grpo_batch_size`
+- Enable `--gradient_checkpointing`
+- Reduce `--num_generations`
+- Use `--use_8bit_optimizer`
+
+**WandB not logging:**
+```bash
+wandb login
+```
+
+### Important Notes
+
+- Do NOT use `device_map="auto"` in multi-GPU mode
+- Do NOT manually set `CUDA_VISIBLE_DEVICES` when using the launch script
+- Kill zombie processes between runs: `pkill -f train.py`
+- Effective batch size = per_gpu_batch x num_gpus x gradient_accumulation_steps
+
+---
+
+## References
+
+This work builds on:
+
+- [LogicInference](https://arxiv.org/abs/2203.15099) - Dataset for teaching logical inference to seq2seq models
+- [FOLIO](https://arxiv.org/abs/2209.00840) - Natural language reasoning with first-order logic
+- [LINC](https://arxiv.org/abs/2310.15164) - Neurosymbolic approach combining LLMs with FOL provers
+- [SatLM](https://arxiv.org/abs/2305.09656) - Satisfiability-aided language models using declarative prompting
+- [ProverQA](https://arxiv.org/abs/2502.06563) - Large language models meet symbolic provers for logical reasoning evaluation
+

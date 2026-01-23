@@ -1,15 +1,33 @@
+# Cache directories
+cache/
 unsloth_compiled_cache/
 __pycache__/
-cache/
-.claude/
+*.pyc
+
+# Model outputs
 sft_models/
 sft_models_unsloth/
 grpo_models/
-grpo_models_4gpu/
-grpo_models_4gpu_conservative/
-grpo_models_4gpu_fixed/
+grpo_models_*/
 grpo_trainer_lora_model/
+
+# Config and logs
 accelerate_config.yaml
 *.log
 *.err
 training_out.txt
+
+# Local scripts (contain user-specific paths)
+scripts/
+
+# IDE and OS
+.claude/
+.DS_Store
+.vscode/
+
+# Documents
+*.pdf
+
+# Environment
+.env
+*.env.local

@@ -1,0 +1,21 @@
+# Core ML dependencies
+# Note: Install vllm first if you need it - it handles PyTorch/CUDA setup
+# pip install vllm
+
+torch>=2.0.0
+transformers>=4.40.0
+accelerate>=0.28.0
+trl>=0.8.0
+peft>=0.10.0
+datasets>=2.18.0
+
+# Logging and utilities
+wandb>=0.16.0
+tqdm>=4.66.0
+huggingface_hub>=0.22.0
+
+# Visualization (optional - for visualize_reward_results.py)
+# matplotlib>=3.8.0
+# seaborn>=0.13.0
+# pandas>=2.2.0
+# numpy>=1.26.0

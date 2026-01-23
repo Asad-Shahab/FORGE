@@ -51,7 +51,7 @@ def ensure_hf_auth():
         return True
     else:
         print("❌ No HF token found!")
-        print("💡 Run: python quick_fix.py")
+        print("💡 Run: huggingface-cli login")
         return False
 
 # Only check auth on main process to avoid exit() in distributed training
